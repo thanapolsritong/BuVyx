@@ -109,12 +109,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       if (doc.exists) {
         final roleStr = doc.data()?['role'] ?? 'User';
         setState(() {
-          if (roleStr == 'Admin')
+          if (roleStr == 'Admin') {
             currentUserRole = UserRole.superAdmin;
-          else if (roleStr == 'SecondAdmin')
+          } else if (roleStr == 'SecondAdmin') {
             currentUserRole = UserRole.secondAdmin;
-          else
+          } else {
             currentUserRole = UserRole.normalUser;
+          }
         });
       }
     }
@@ -130,15 +131,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Color get textMuted =>
       AppSettings.isDarkMode ? Colors.white54 : Colors.grey[600]!;
 
-  // ตรวจสอบว่าแอดมินคนนี้ มีสิทธิ์แก้ข้อมูลคนอื่นไหม
+  // 🚨 ตรวจสอบว่าแอดมินคนนี้ มีสิทธิ์แก้ข้อมูลคนอื่นไหม
   bool _canManageUser(AppUser targetUser) {
-    if (targetUser.id == currentUserId)
+    if (targetUser.id == currentUserId) {
       return false; // ห้ามแก้ไขสิทธิ์ตัวเองในหน้านี้
-    if (currentUserRole == UserRole.superAdmin)
+    }
+    if (currentUserRole == UserRole.superAdmin) {
       return true; // Super Admin แก้ได้ทุกคน
+    }
     if (currentUserRole == UserRole.secondAdmin) {
-      return targetUser.role ==
-          UserRole.normalUser; // Second Admin แก้ได้แค่คนที่เป็น User
+      // Second Admin แก้ได้แค่คนที่เป็น Normal User เท่านั้น
+      return targetUser.role == UserRole.normalUser;
     }
     return false;
   }
@@ -294,6 +297,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   dropdownColor: cardColor,
                   style: TextStyle(color: textColor),
                   items: [
+                    // 🚨 เพิ่มให้ SuperAdmin มองเห็นตัวเลือก Super Admin ด้วย
+                    if (currentUserRole == UserRole.superAdmin)
+                      const DropdownMenuItem(
+                        value: UserRole.superAdmin,
+                        child: Text("Super Admin"),
+                      ),
                     if (currentUserRole == UserRole.superAdmin)
                       const DropdownMenuItem(
                         value: UserRole.secondAdmin,
@@ -339,9 +348,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
                           String tempPass = _generateRandomString(8);
                           String token = _generateRandomString(16);
-                          String roleStr = selectedRole == UserRole.secondAdmin
-                              ? 'SecondAdmin'
-                              : 'User';
+
+                          // 🚨 แปลงค่าจาก Enum เป็น String ให้ถูกต้องก่อนบันทึกลง Database
+                          String roleStr = 'User';
+                          if (selectedRole == UserRole.superAdmin)
+                            roleStr = 'Admin';
+                          if (selectedRole == UserRole.secondAdmin)
+                            roleStr = 'SecondAdmin';
 
                           // สร้าง Document ใหม่ใน Firestore
                           await FirebaseFirestore.instance
@@ -665,12 +678,25 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 },
                               ),
                             ] else ...[
+                              // 🚨 โชว์ไอคอนบัญชีของฉัน หรือ ล็อค
                               Tooltip(
-                                message: "No permission to edit this role",
-                                child: Icon(
-                                  LucideIcons.lock,
-                                  color: borderColor,
-                                  size: 20,
+                                message: user.id == currentUserId
+                                    ? "Your Account"
+                                    : "No permission to edit this role",
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    right: 8.0,
+                                    left: 16.0,
+                                  ),
+                                  child: Icon(
+                                    user.id == currentUserId
+                                        ? LucideIcons.userCheck
+                                        : LucideIcons.lock,
+                                    color: user.id == currentUserId
+                                        ? Colors.blue
+                                        : borderColor,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
                             ],
