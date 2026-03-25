@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:math';
 import 'dashboard_screen.dart'; // ดึงค่า Theme และ AppSettings มาจากที่นี่
 
@@ -15,7 +17,6 @@ class AppUser {
   UserRole role;
   String tempPassword;
   String token;
-  String? permanentPassword;
   bool isTokenUsed;
   bool isActive;
   String organization;
@@ -26,11 +27,32 @@ class AppUser {
     required this.role,
     required this.tempPassword,
     required this.token,
-    this.permanentPassword,
     this.isTokenUsed = false,
     this.isActive = true,
-    this.organization = "BuBeacon Network",
+    this.organization = "BuVyx Network",
   });
+
+  // ฟังก์ชันแปลงข้อมูลจาก Firestore มาเป็น Object ในแอป
+  factory AppUser.fromFirestore(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+
+    // แปลง String ใน Database เป็น Enum
+    String roleStr = data['role'] ?? 'User';
+    UserRole r = UserRole.normalUser;
+    if (roleStr == 'Admin') r = UserRole.superAdmin;
+    if (roleStr == 'SecondAdmin') r = UserRole.secondAdmin;
+
+    return AppUser(
+      id: doc.id,
+      email: data['email'] ?? 'Unknown Email',
+      role: r,
+      tempPassword: data['tempPassword'] ?? '',
+      token: data['token'] ?? '',
+      isTokenUsed: data['isTokenUsed'] ?? true,
+      isActive: data['isActive'] ?? true,
+      organization: data['organization'] ?? 'BuVyx Network',
+    );
+  }
 
   String get roleName {
     switch (role) {
@@ -55,21 +77,6 @@ class AppUser {
   }
 }
 
-class GlobalAuth {
-  static List<AppUser> usersDb = [
-    AppUser(
-      id: "1",
-      email: "admin",
-      role: UserRole.superAdmin,
-      tempPassword: "",
-      token: "",
-      permanentPassword: "1234",
-      isTokenUsed: true,
-    ),
-  ];
-  static AppUser? currentUser;
-}
-
 // ==========================================
 // 2. หน้า User Management Screen
 // ==========================================
@@ -81,12 +88,38 @@ class UserManagementScreen extends StatefulWidget {
 }
 
 class _UserManagementScreenState extends State<UserManagementScreen> {
-  // ดึงค่าสิทธิ์มาจากคนที่ล็อกอินอยู่
-  UserRole get currentUserRole =>
-      GlobalAuth.currentUser?.role ?? UserRole.normalUser;
-  String get currentUserId => GlobalAuth.currentUser?.id ?? "";
+  UserRole currentUserRole = UserRole.normalUser;
+  String currentUserId = "";
 
-  // สี Theme เปลี่ยนไปใช้ AppSettings ให้ตรงกับหน้าหลัก
+  @override
+  void initState() {
+    super.initState();
+    _fetchCurrentUserRole();
+  }
+
+  // ดึงสิทธิ์ของคนที่ล็อกอินอยู่ เพื่อนำมาคำนวณสิทธิ์การจัดการ
+  Future<void> _fetchCurrentUserRole() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      currentUserId = user.uid;
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      if (doc.exists) {
+        final roleStr = doc.data()?['role'] ?? 'User';
+        setState(() {
+          if (roleStr == 'Admin')
+            currentUserRole = UserRole.superAdmin;
+          else if (roleStr == 'SecondAdmin')
+            currentUserRole = UserRole.secondAdmin;
+          else
+            currentUserRole = UserRole.normalUser;
+        });
+      }
+    }
+  }
+
   Color get bgColor =>
       AppSettings.isDarkMode ? const Color(0xFF030712) : Colors.grey[50]!;
   Color get cardColor =>
@@ -97,18 +130,22 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Color get textMuted =>
       AppSettings.isDarkMode ? Colors.white54 : Colors.grey[600]!;
 
+  // ตรวจสอบว่าแอดมินคนนี้ มีสิทธิ์แก้ข้อมูลคนอื่นไหม
   bool _canManageUser(AppUser targetUser) {
-    if (targetUser.id == currentUserId) return false;
-    if (currentUserRole == UserRole.superAdmin) return true;
+    if (targetUser.id == currentUserId)
+      return false; // ห้ามแก้ไขสิทธิ์ตัวเองในหน้านี้
+    if (currentUserRole == UserRole.superAdmin)
+      return true; // Super Admin แก้ได้ทุกคน
     if (currentUserRole == UserRole.secondAdmin) {
-      return targetUser.role == UserRole.normalUser;
+      return targetUser.role ==
+          UserRole.normalUser; // Second Admin แก้ได้แค่คนที่เป็น User
     }
     return false;
   }
 
   String _generateRandomString(int length) {
     const chars =
-        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#%^&*';
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     Random rnd = Random();
     return String.fromCharCodes(
       Iterable.generate(
@@ -189,7 +226,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  value,
+                  value.isEmpty ? "N/A" : value,
                   style: TextStyle(
                     color: textColor,
                     fontWeight: FontWeight.bold,
@@ -219,6 +256,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   void _showAddUserDialog() {
     final TextEditingController emailController = TextEditingController();
     UserRole selectedRole = UserRole.normalUser;
+    bool isSaving = false;
 
     showDialog(
       context: context,
@@ -267,8 +305,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     ),
                   ],
                   onChanged: (UserRole? value) {
-                    if (value != null)
+                    if (value != null) {
                       setDialogState(() => selectedRole = value);
+                    }
                   },
                   decoration: InputDecoration(
                     labelText: "Assign Role",
@@ -292,34 +331,55 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                onPressed: () {
-                  if (emailController.text.trim().isNotEmpty) {
-                    String tempPass = _generateRandomString(8);
-                    String token = _generateRandomString(16);
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (emailController.text.trim().isNotEmpty) {
+                          setDialogState(() => isSaving = true);
 
-                    setState(() {
-                      GlobalAuth.usersDb.add(
-                        AppUser(
-                          id: DateTime.now().millisecondsSinceEpoch.toString(),
-                          email: emailController.text.trim(),
-                          role: selectedRole,
-                          tempPassword: tempPass,
-                          token: token,
+                          String tempPass = _generateRandomString(8);
+                          String token = _generateRandomString(16);
+                          String roleStr = selectedRole == UserRole.secondAdmin
+                              ? 'SecondAdmin'
+                              : 'User';
+
+                          // สร้าง Document ใหม่ใน Firestore
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .add({
+                                'email': emailController.text.trim(),
+                                'role': roleStr,
+                                'tempPassword': tempPass,
+                                'token': token,
+                                'isTokenUsed': false,
+                                'isActive': true,
+                                'createdAt': FieldValue.serverTimestamp(),
+                              });
+
+                          if (mounted) {
+                            Navigator.pop(context); // ปิดหน้าต่าง Add User
+                            _showCredentialsDialog(
+                              // เด้งหน้าต่างโชว์รหัสใหม่
+                              emailController.text.trim(),
+                              tempPass,
+                              token,
+                            );
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
                         ),
-                      );
-                    });
-                    Navigator.pop(context);
-                    _showCredentialsDialog(
-                      emailController.text.trim(),
-                      tempPass,
-                      token,
-                    );
-                  }
-                },
-                child: const Text(
-                  "Generate Credentials",
-                  style: TextStyle(color: Colors.white),
-                ),
+                      )
+                    : const Text(
+                        "Generate Credentials",
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ],
           );
@@ -399,170 +459,225 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: borderColor),
               ),
-              child: ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: GlobalAuth.usersDb.length,
-                separatorBuilder: (context, index) =>
-                    Divider(color: borderColor, height: 1),
-                itemBuilder: (context, index) {
-                  final user = GlobalAuth.usersDb[index];
-                  final canManage = _canManageUser(user);
+              // ใช้ StreamBuilder ดึงข้อมูลจาก Firestore แบบ Real-time
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('users')
+                    .orderBy('createdAt', descending: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text("No users found."),
+                      ),
+                    );
+                  }
 
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          backgroundColor: user.roleColor.withOpacity(0.2),
-                          child: Icon(LucideIcons.user, color: user.roleColor),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                  final userDocs = snapshot.data!.docs;
+
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: userDocs.length,
+                    separatorBuilder: (context, index) =>
+                        Divider(color: borderColor, height: 1),
+                    itemBuilder: (context, index) {
+                      final doc = userDocs[index];
+                      final user = AppUser.fromFirestore(doc);
+                      final canManage = _canManageUser(user);
+
+                      return Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              backgroundColor: user.roleColor.withOpacity(0.2),
+                              child: Icon(
+                                LucideIcons.user,
+                                color: user.roleColor,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    user.email,
-                                    style: TextStyle(
-                                      color: textColor,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: user.roleColor.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: user.roleColor.withOpacity(0.5),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      user.roleName,
-                                      style: TextStyle(
-                                        color: user.roleColor,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  if (!user.isActive) ...[
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Text(
-                                        "Suspended",
+                                  Row(
+                                    children: [
+                                      Text(
+                                        user.email,
                                         style: TextStyle(
-                                          color: Colors.red,
-                                          fontSize: 10,
+                                          color: textColor,
                                           fontWeight: FontWeight.bold,
+                                          fontSize: 16,
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: user.roleColor.withOpacity(
+                                            0.1,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: user.roleColor.withOpacity(
+                                              0.5,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          user.roleName,
+                                          style: TextStyle(
+                                            color: user.roleColor,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      if (!user.isActive) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            "Suspended",
+                                            style: TextStyle(
+                                              color: Colors.red,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        user.isTokenUsed
+                                            ? LucideIcons.checkCircle2
+                                            : LucideIcons.key,
+                                        size: 12,
+                                        color: user.isTokenUsed
+                                            ? Colors.green
+                                            : Colors.orange,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        user.isTokenUsed
+                                            ? "Token Verified / Active"
+                                            : "Waiting for First Login",
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(
-                                    user.isTokenUsed
-                                        ? LucideIcons.checkCircle2
-                                        : LucideIcons.key,
-                                    size: 12,
-                                    color: user.isTokenUsed
-                                        ? Colors.green
-                                        : Colors.orange,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    user.isTokenUsed
-                                        ? "Token Verified / Active"
-                                        : "Waiting for First Login",
-                                    style: TextStyle(
-                                      color: textMuted,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
+                            ),
+
+                            if (canManage) ...[
+                              IconButton(
+                                tooltip: "Regenerate Password & Token",
+                                icon: const Icon(
+                                  LucideIcons.refreshCw,
+                                  color: Colors.blue,
+                                  size: 20,
+                                ),
+                                onPressed: () async {
+                                  // อัปเดตข้อมูลใน Firestore
+                                  String newPass = _generateRandomString(8);
+                                  String newToken = _generateRandomString(16);
+
+                                  await FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(user.id)
+                                      .update({
+                                        'tempPassword': newPass,
+                                        'token': newToken,
+                                        'isTokenUsed': false,
+                                      });
+
+                                  _showCredentialsDialog(
+                                    user.email,
+                                    newPass,
+                                    newToken,
+                                    isReset: true,
+                                  );
+                                },
+                              ),
+                              Tooltip(
+                                message: user.isActive
+                                    ? "Suspend User"
+                                    : "Activate User",
+                                child: Switch(
+                                  value: user.isActive,
+                                  activeColor: Colors.green,
+                                  onChanged: (val) async {
+                                    // อัปเดตสถานะ Active ใน Firestore
+                                    await FirebaseFirestore.instance
+                                        .collection('users')
+                                        .doc(user.id)
+                                        .update({'isActive': val});
+                                  },
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: "Delete User",
+                                icon: const Icon(
+                                  LucideIcons.trash2,
+                                  color: Colors.redAccent,
+                                  size: 20,
+                                ),
+                                onPressed: () async {
+                                  // ลบผู้ใช้ออกจาก Firestore
+                                  await FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(user.id)
+                                      .delete();
+                                },
+                              ),
+                            ] else ...[
+                              Tooltip(
+                                message: "No permission to edit this role",
+                                child: Icon(
+                                  LucideIcons.lock,
+                                  color: borderColor,
+                                  size: 20,
+                                ),
                               ),
                             ],
-                          ),
+                          ],
                         ),
-
-                        if (canManage) ...[
-                          IconButton(
-                            tooltip: "Regenerate Password & Token",
-                            icon: const Icon(
-                              LucideIcons.refreshCw,
-                              color: Colors.blue,
-                              size: 20,
-                            ),
-                            onPressed: () {
-                              String newPass = _generateRandomString(8);
-                              String newToken = _generateRandomString(16);
-                              setState(() {
-                                user.tempPassword = newPass;
-                                user.token = newToken;
-                                user.isTokenUsed = false;
-                              });
-                              _showCredentialsDialog(
-                                user.email,
-                                newPass,
-                                newToken,
-                                isReset: true,
-                              );
-                            },
-                          ),
-                          Tooltip(
-                            message: user.isActive
-                                ? "Suspend User"
-                                : "Activate User",
-                            child: Switch(
-                              value: user.isActive,
-                              activeColor: Colors.green,
-                              onChanged: (val) =>
-                                  setState(() => user.isActive = val),
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: "Delete User",
-                            icon: const Icon(
-                              LucideIcons.trash2,
-                              color: Colors.redAccent,
-                              size: 20,
-                            ),
-                            onPressed: () => setState(
-                              () => GlobalAuth.usersDb.removeAt(index),
-                            ),
-                          ),
-                        ] else ...[
-                          Tooltip(
-                            message: "No permission to edit this role",
-                            child: Icon(
-                              LucideIcons.lock,
-                              color: borderColor,
-                              size: 20,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+                      );
+                    },
                   );
                 },
               ),

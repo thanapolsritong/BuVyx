@@ -3,9 +3,11 @@ import 'package:syncfusion_flutter_maps/maps.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:intl/intl.dart'; // ✅ สำหรับจัดการรูปแบบเวลา
+import 'package:intl/intl.dart';
 import 'dart:async';
 import 'dart:math';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'thailand_map_screen.dart';
 import 'user_management_screen.dart';
 import 'login_screen.dart';
@@ -29,17 +31,24 @@ class AppSettings {
 }
 
 // ==========================================
-// 2. Model สำหรับอุปกรณ์ (เพิ่มสถานะพลังงานและสัญญาณ)
+// 2. Model สำหรับอุปกรณ์ (รองรับค่า DSP)
 // ==========================================
 class ConnectedDevice {
+  String docId; // เก็บ ID ของเอกสารจาก Firestore
   String sn;
   String name;
+  String zone; // เก็บชื่อสถานที่เพื่อให้แมตช์กับ Dropdown
   Color color;
   LatLng location;
 
-  // ✅ 1. แยก List กราฟเป็น Live และ History
   List<FlSpot> liveSpots = [];
   List<FlSpot> historySpots = [];
+
+  // ค่า Advanced DSP
+  double currentRms = 0.0;
+  double maxPga = 0.0;
+  List<FlSpot> fftSpots = []; // สำหรับกราฟ FFT (ความถี่)
+  List<List<double>> spectrogramData = []; // สำหรับ Heatmap (2D Array)
 
   double pga = 0.0;
   double temp = 28.5;
@@ -48,14 +57,15 @@ class ConnectedDevice {
   double altitude = 15.0;
   bool isActive = true;
 
-  // ✅ เพิ่มตัวแปรใหม่สำหรับ Device Management
-  bool isPluggedIn; // ใช้ไฟบ้าน (true) หรือใช้แบตเตอรี่สำรอง (false)
-  int batteryLevel; // เปอร์เซ็นต์แบต (0 - 100)
-  int signalStrength; // ความแรงสัญญาณมือถือ (0 = ไม่มีสัญญาณ, 1-4 = ขีดสัญญาณ)
+  bool isPluggedIn;
+  int batteryLevel;
+  int signalStrength;
 
   ConnectedDevice({
+    required this.docId,
     required this.sn,
     required this.name,
+    required this.zone,
     required this.color,
     required this.location,
     this.altitude = 15.0,
@@ -72,29 +82,22 @@ class ConnectedDevice {
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
-  static Map<String, List<ConnectedDevice>> locationDatabase = {
-    "Pathum Thani - Eng Bldg": [],
-    "Bangkok - Science Lab": [],
-    "Chiang Mai - Main Hall": [],
-  };
-
-  static String lastVisitedLocation = "Pathum Thani - Eng Bldg";
-  static List<String> recentLocations = [
-    "Pathum Thani - Eng Bldg",
-    "Bangkok - Science Lab",
-    "Chiang Mai - Main Hall",
-  ];
+  static String lastVisitedLocation = "";
+  static List<String> recentLocations = [];
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ✅ ตัวแปรควบคุมกราฟแบบ Real-time
-  int _startTime = DateTime.now().millisecondsSinceEpoch;
-  Timer? timer;
+  // --- ตัวแปรสำหรับเชื่อมต่อข้อมูลจริง ---
+  List<ConnectedDevice> allDevices = [];
+  StreamSubscription<QuerySnapshot>? _deviceSubscription;
 
-  // ✅ 2. เพิ่มตัวแปรสำหรับโหมด History และ DatePicker
+  // ตัวแปรควบคุมกราฟ
+  int _startTime = DateTime.now().millisecondsSinceEpoch;
+
+  // ตัวแปรสำหรับโหมด History และ DatePicker
   bool _isLiveMode = true;
   List<String> _hiddenDeviceSn = [];
   DateTime? _startDate;
@@ -102,9 +105,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   late MapZoomPanBehavior _zoomPanBehavior;
 
-  bool get isAdmin =>
-      GlobalAuth.currentUser?.role == UserRole.superAdmin ||
-      GlobalAuth.currentUser?.role == UserRole.secondAdmin;
+  String userName = "Loading...";
+  String userEmail = "Loading...";
+  String userOrg = "Loading...";
+  String userRoleString = "User";
+  UserRole currentUserRole = UserRole.normalUser;
+  bool isAdmin = false;
 
   final List<Color> deviceColors = [
     Colors.blue,
@@ -114,27 +120,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Colors.pink,
   ];
 
-  List<ConnectedDevice> get currentDevices =>
-      DashboardScreen.locationDatabase[DashboardScreen.lastVisitedLocation] ??
-      [];
+  // คัดกรองเอาเฉพาะอุปกรณ์ที่อยู่ในสถานที่ (Zone) ปัจจุบัน
+  List<ConnectedDevice> get currentDevices => allDevices
+      .where((d) => d.zone == DashboardScreen.lastVisitedLocation)
+      .toList();
 
-  Color get bgColor => AppSettings.isDarkMode
-      ? const Color(0xFF1E1E1E)
-      : Colors.grey[50]!; // สีพื้นหลัง
-  Color get cardColor => AppSettings.isDarkMode
-      ? const Color(0xFF2C2C2C)
-      : Colors.white; // สีของ Card
-  Color get borderColor => AppSettings.isDarkMode
-      ? Colors.grey[700]!
-      : Colors.grey[300]!; // สีของเส้นขอบ
-  Color get textColor =>
-      AppSettings.isDarkMode ? Colors.white : Colors.black; // สีของข้อความ
-  Color get textMuted => AppSettings.isDarkMode
-      ? Colors.grey[400]!
-      : Colors.grey[600]!; // สีข้อความจาง
-  Color get dropdownColor => AppSettings.isDarkMode
-      ? const Color(0xFF2C2C2C)
-      : Colors.white; // สีของ Dropdown
+  Color get bgColor =>
+      AppSettings.isDarkMode ? const Color(0xFF1E1E1E) : Colors.grey[50]!;
+  Color get cardColor =>
+      AppSettings.isDarkMode ? const Color(0xFF2C2C2C) : Colors.white;
+  Color get borderColor =>
+      AppSettings.isDarkMode ? Colors.grey[700]! : Colors.grey[300]!;
+  Color get textColor => AppSettings.isDarkMode ? Colors.white : Colors.black;
+  Color get textMuted =>
+      AppSettings.isDarkMode ? Colors.grey[400]! : Colors.grey[600]!;
+  Color get dropdownColor =>
+      AppSettings.isDarkMode ? const Color(0xFF2C2C2C) : Colors.white;
 
   String get mapUrl => AppSettings.isDarkMode
       ? 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
@@ -143,46 +144,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ เพิ่มอุปกรณ์จำลองที่มีทั้งแบบไฟบ้านและแบบแบตเตอรี่
-    if (DashboardScreen.locationDatabase["Pathum Thani - Eng Bldg"]!.isEmpty) {
-      _addDeviceToSystem(
-        "Pathum Thani - Eng Bldg",
-        "SN-BU-001",
-        "Node-01 (Main)",
-        const LatLng(14.0208, 100.5250),
-        isPluggedIn: true,
-        batteryLevel: 100,
-        signalStrength: 4,
-      );
-      _addDeviceToSystem(
-        "Pathum Thani - Eng Bldg",
-        "SN-BU-002",
-        "Node-02 (Gate)",
-        const LatLng(14.0250, 100.5290),
-        isPluggedIn: false,
-        batteryLevel: 42,
-        signalStrength: 2,
-      );
-    }
-    if (DashboardScreen.locationDatabase["Bangkok - Science Lab"]!.isEmpty) {
-      _addDeviceToSystem(
-        "Bangkok - Science Lab",
-        "SN-BKK-001",
-        "Node-01",
-        const LatLng(13.7563, 100.5018),
-      );
-    }
+    _fetchFirebaseUserProfile();
 
-    MapLatLng initialCenter = const MapLatLng(13.7563, 100.5018);
-    if (currentDevices.isNotEmpty) {
-      initialCenter = MapLatLng(
-        currentDevices.first.location.latitude,
-        currentDevices.first.location.longitude,
-      );
-    }
+    // ✅ เปิดการทำงานของ Real-time Listener ทันทีที่เข้าหน้าจอ
+    _listenToDevicesFromFirestore();
 
     _zoomPanBehavior = MapZoomPanBehavior(
-      focalLatLng: initialCenter,
+      focalLatLng: const MapLatLng(14.0208, 100.5250), // ค่าเริ่มต้น
       zoomLevel: 15,
       enableDoubleTapZooming: true,
       enablePinching: true,
@@ -190,84 +158,240 @@ class _DashboardScreenState extends State<DashboardScreen> {
       enableMouseWheelZooming: true,
     );
 
-    // ✅ 3. ตั้งค่า Default History เป็นย้อนหลัง 7 วัน
     _endDate = DateTime.now();
     _startDate = _endDate!.subtract(const Duration(days: 7));
-    _startSimulation();
   }
 
-  void _startSimulation() {
-    timer?.cancel();
-    int seconds = 1;
-    if (AppSettings.chartUpdateRate == '3 Seconds') seconds = 3;
-    if (AppSettings.chartUpdateRate == '5 Seconds') seconds = 5;
+  @override
+  void dispose() {
+    _deviceSubscription?.cancel(); // อย่าลืมปิดสตรีมข้อมูลเมื่อออกจากหน้านี้
+    super.dispose();
+  }
 
-    int maxSpots = 30;
-    if (AppSettings.chartDataView == '60 Seconds') maxSpots = 60;
-    if (AppSettings.chartDataView == '5 Minutes') maxSpots = 300;
+  // ----------------------------------------
+  // ✅ ระบบดึงข้อมูลจาก Firestore แบบ Real-time (รับค่า DSP ของจริง)
+  // ----------------------------------------
+  void _listenToDevicesFromFirestore() {
+    _deviceSubscription = FirebaseFirestore.instance
+        .collection('devices')
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) return;
 
-    timer = Timer.periodic(Duration(seconds: seconds), (t) {
-      // ✅ 4. อัปเดตกราฟเฉพาะตอนอยู่โหมด Live
-      if (mounted && _isLiveMode) {
-        setState(() {
-          double currentTime =
-              (DateTime.now().millisecondsSinceEpoch - _startTime) / 1000;
+          setState(() {
+            for (var change in snapshot.docChanges) {
+              final data = change.doc.data();
+              final docId = change.doc.id;
 
-          for (var device in currentDevices) {
-            if (!device.isActive) continue;
+              if (data == null) continue;
 
-            // จำลองค่าเซ็นเซอร์
-            bool isSpike = Random().nextDouble() < 0.05;
-            device.pga = isSpike
-                ? Random().nextDouble() * 15
-                : Random().nextDouble() * 2;
-            device.temp += (Random().nextDouble() - 0.5) * 0.1;
-            device.humidity += (Random().nextDouble() - 0.5) * 0.2;
-            device.pressure += (Random().nextDouble() - 0.5) * 0.5;
+              if (change.type == DocumentChangeType.added) {
+                if (!allDevices.any((d) => d.docId == docId)) {
+                  allDevices.add(
+                    ConnectedDevice(
+                      docId: docId,
+                      sn: data['sn'] ?? 'Unknown',
+                      name: data['name'] ?? 'Unnamed',
+                      zone: data['zone'] ?? 'Unknown',
+                      color:
+                          deviceColors[allDevices.length % deviceColors.length],
+                      location: LatLng(
+                        (data['lat'] ?? 14.0).toDouble(),
+                        (data['lng'] ?? 100.5).toDouble(),
+                      ),
+                      isActive: data['isActive'] ?? true,
+                      isPluggedIn: data['isPluggedIn'] ?? true,
+                      batteryLevel: (data['batteryLevel'] ?? 100).toInt(),
+                      signalStrength: (data['signalStrength'] ?? 4).toInt(),
+                    ),
+                  );
+                }
+              } else if (change.type == DocumentChangeType.modified) {
+                final index = allDevices.indexWhere((d) => d.docId == docId);
+                if (index != -1) {
+                  allDevices[index].name =
+                      data['name'] ?? allDevices[index].name;
+                  allDevices[index].isActive =
+                      data['isActive'] ?? allDevices[index].isActive;
+                  allDevices[index].isPluggedIn =
+                      data['isPluggedIn'] ?? allDevices[index].isPluggedIn;
+                  allDevices[index].batteryLevel =
+                      (data['batteryLevel'] ?? allDevices[index].batteryLevel)
+                          .toInt();
+                  allDevices[index].signalStrength =
+                      (data['signalStrength'] ??
+                              allDevices[index].signalStrength)
+                          .toInt();
 
-            // ✅ จำลองแบตเตอรี่ลดลงช้าๆ หากไม่ได้เสียบปลั๊ก
-            if (!device.isPluggedIn && Random().nextDouble() < 0.05) {
-              device.batteryLevel = max(0, device.batteryLevel - 1);
+                  // รับค่าเซนเซอร์พื้นฐาน
+                  allDevices[index].pga = (data['pga'] ?? allDevices[index].pga)
+                      .toDouble();
+                  allDevices[index].temp =
+                      (data['temp'] ?? allDevices[index].temp).toDouble();
+                  allDevices[index].humidity =
+                      (data['humidity'] ?? allDevices[index].humidity)
+                          .toDouble();
+                  allDevices[index].pressure =
+                      (data['pressure'] ?? allDevices[index].pressure)
+                          .toDouble();
+
+                  // ✅ รับค่า Advanced DSP
+                  allDevices[index].currentRms =
+                      (data['rms'] ?? allDevices[index].currentRms).toDouble();
+                  allDevices[index].maxPga =
+                      (data['max_pga'] ?? allDevices[index].maxPga).toDouble();
+
+                  if (data['fftSpots'] != null) {
+                    List<dynamic> rawFft = data['fftSpots'];
+                    allDevices[index].fftSpots = rawFft
+                        .map(
+                          (e) => FlSpot(
+                            (e['x'] ?? 0).toDouble(),
+                            (e['y'] ?? 0).toDouble(),
+                          ),
+                        )
+                        .toList();
+                  }
+
+                  if (data['spectrogram'] != null) {
+                    List<dynamic> rawSpec = data['spectrogram'];
+                    allDevices[index].spectrogramData = rawSpec
+                        .map(
+                          (col) => List<double>.from(
+                            col.map((v) => (v ?? 0.0).toDouble()),
+                          ),
+                        )
+                        .toList();
+                  }
+
+                  // เพิ่มกราฟแบบ Real-time เมื่อมีข้อมูลใหม่เข้ามา
+                  if (_isLiveMode && data['pga'] != null) {
+                    double timeKey =
+                        (DateTime.now().millisecondsSinceEpoch - _startTime) /
+                        1000;
+                    allDevices[index].liveSpots.add(
+                      FlSpot(timeKey, allDevices[index].pga),
+                    );
+                    int maxSpots = AppSettings.chartDataView == '5 Minutes'
+                        ? 300
+                        : (AppSettings.chartDataView == '60 Seconds' ? 60 : 30);
+                    if (allDevices[index].liveSpots.length > maxSpots) {
+                      allDevices[index].liveSpots.removeAt(0);
+                    }
+                  }
+                }
+              } else if (change.type == DocumentChangeType.removed) {
+                allDevices.removeWhere((d) => d.docId == docId);
+              }
             }
-            // ✅ จำลองสัญญาณแกว่ง (1-4)
-            if (Random().nextDouble() < 0.1) {
-              device.signalStrength = max(
-                1,
-                min(4, device.signalStrength + (Random().nextBool() ? 1 : -1)),
+
+            if (currentDevices.isNotEmpty) {
+              _zoomPanBehavior.focalLatLng = MapLatLng(
+                currentDevices.first.location.latitude,
+                currentDevices.first.location.longitude,
               );
             }
-
-            // ✅ 5. เปลี่ยนจาก spots เป็น liveSpots
-            device.liveSpots.add(FlSpot(currentTime, device.pga));
-            if (device.liveSpots.length > maxSpots)
-              device.liveSpots.removeAt(0);
-          }
+          });
         });
-      }
-    });
   }
 
-  // ✅ 6. ฟังก์ชันจำลองการดึงข้อมูลย้อนหลัง
+  // ----------------------------------------
+  // ✅ ฟังก์ชันดึง Profile จาก Firestore และโหลดการตั้งค่า
+  // ----------------------------------------
+  Future<void> _fetchFirebaseUserProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      setState(() => userEmail = user.email ?? "Unknown Email");
+      try {
+        DocumentSnapshot doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (doc.exists) {
+          final data = doc.data() as Map<String, dynamic>;
+          setState(() {
+            userName = data['name'] ?? "Unknown Name";
+            userOrg = data['organization'] ?? "BuVyx Network";
+
+            String dbRole = data['role'] ?? 'User';
+            if (dbRole == 'Admin') {
+              currentUserRole = UserRole.superAdmin;
+              userRoleString = "Super Admin";
+              isAdmin = true;
+            } else if (dbRole == 'SecondAdmin') {
+              currentUserRole = UserRole.secondAdmin;
+              userRoleString = "Second Admin";
+              isAdmin = true;
+            } else {
+              currentUserRole = UserRole.normalUser;
+              userRoleString = "User";
+              isAdmin = false;
+            }
+
+            if (data.containsKey('settings')) {
+              final config = data['settings'];
+              AppSettings.isDarkMode = config['isDarkMode'] ?? true;
+              AppSettings.tempUnit = config['tempUnit'] ?? 'Celsius (°C)';
+              AppSettings.is24HourFormat = config['is24HourFormat'] ?? true;
+              AppSettings.criticalAlerts = config['criticalAlerts'] ?? true;
+              AppSettings.offlineWarning = config['offlineWarning'] ?? true;
+              AppSettings.muteSounds = config['muteSounds'] ?? false;
+              AppSettings.chartUpdateRate =
+                  config['chartUpdateRate'] ?? '1 Second';
+              AppSettings.chartDataView =
+                  config['chartDataView'] ?? '30 Seconds';
+            }
+          });
+        }
+      } catch (e) {
+        print("Error fetching user profile: $e");
+      }
+    }
+  }
+
+  // ----------------------------------------
+  // ✅ ฟังก์ชันใหม่: เซฟการตั้งค่าลง Firestore ทันทีที่มีการเปลี่ยน
+  // ----------------------------------------
+  Future<void> _saveSettingsToFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'settings': {
+          'isDarkMode': AppSettings.isDarkMode,
+          'tempUnit': AppSettings.tempUnit,
+          'is24HourFormat': AppSettings.is24HourFormat,
+          'criticalAlerts': AppSettings.criticalAlerts,
+          'offlineWarning': AppSettings.offlineWarning,
+          'muteSounds': AppSettings.muteSounds,
+          'chartUpdateRate': AppSettings.chartUpdateRate,
+          'chartDataView': AppSettings.chartDataView,
+        },
+      }, SetOptions(merge: true));
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    await FirebaseAuth.instance.signOut();
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   void _fetchHistoryData() {
     if (_startDate == null || _endDate == null) return;
+    // ระบบ History จะต้องดึงข้อมูลจาก Database ในอนาคต
     setState(() {
       for (var device in currentDevices) {
         device.historySpots.clear();
-        int totalSeconds = _endDate!.difference(_startDate!).inSeconds;
-        int step = max(1, totalSeconds ~/ 30); // แบ่งให้ได้ 30 จุด
-        for (int i = 0; i <= 30; i++) {
-          DateTime pointTime = _startDate!.add(Duration(seconds: i * step));
-          double xValue = pointTime.millisecondsSinceEpoch / 1000;
-          double yValue =
-              (Random().nextDouble() * 5) +
-              (Random().nextDouble() < 0.1 ? 10 : 0);
-          device.historySpots.add(FlSpot(xValue, yValue));
-        }
       }
     });
   }
 
-  // ✅ 7. ฟังก์ชันเปิดหน้าต่างเลือกวันที่และเวลา
   Future<void> _selectDateTime(BuildContext context, bool isStart) async {
     DateTime initialDate = isStart
         ? (_startDate ?? DateTime.now())
@@ -329,48 +453,95 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    timer?.cancel();
-    super.dispose();
-  }
-
-  void _addDeviceToSystem(
+  // ----------------------------------------
+  // ✅ ฟังก์ชันเพิ่มข้อมูลลง Firestore ของจริง
+  // ----------------------------------------
+  Future<void> _addDeviceToFirestore(
     String location,
     String sn,
     String name,
-    LatLng loc, {
-    bool isPluggedIn = true,
-    int batteryLevel = 100,
-    int signalStrength = 4,
-  }) {
+    LatLng loc,
+  ) async {
     if (location.isEmpty || location == "EMPTY") return;
-    List<ConnectedDevice> list =
-        DashboardScreen.locationDatabase[location] ?? [];
-    setState(() {
-      list.add(
-        ConnectedDevice(
-          sn: sn,
-          name: name,
-          color: deviceColors[list.length % deviceColors.length],
-          location: loc,
-          altitude: 10.0 + Random().nextDouble() * 50,
-          isPluggedIn: isPluggedIn,
-          batteryLevel: batteryLevel,
-          signalStrength: signalStrength,
+    try {
+      // ✅ เปลี่ยนมาใช้ .doc(sn).set() เพื่อล็อกให้ Document ID เป็น BU-XXXXXXXX
+      await FirebaseFirestore.instance.collection('devices').doc(sn).set({
+        'sn': sn,
+        'name': name,
+        'zone': location,
+        'lat': loc.latitude,
+        'lng': loc.longitude,
+        'isActive': true,
+        'isPluggedIn': true,
+        'batteryLevel': 100,
+        'signalStrength': 4,
+        'pga': 0.0,
+        'temp': 28.0,
+        'humidity': 50.0,
+        'pressure': 1010.0,
+        'rms': 0.0,
+        'max_pga': 0.0,
+        'fftSpots': [],
+        'spectrogram': [],
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Device Added Successfully!"),
+          backgroundColor: Colors.green,
         ),
       );
-      DashboardScreen.locationDatabase[location] = list;
-    });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Failed to add device: $e"),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
-  void _deleteDevice(int index) {
-    setState(() {
-      currentDevices.removeAt(index);
-    });
+  // ==========================================
+  // ✨ UI: การสร้าง Heatmap Spectrogram แบบแมนนวล ✨
+  // ==========================================
+  Widget _buildSpectrogram(ConnectedDevice device) {
+    if (device.spectrogramData.isEmpty)
+      return const Center(
+        child: Text(
+          "Waiting for signal data...",
+          style: TextStyle(fontSize: 10, color: Colors.grey),
+        ),
+      );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: device.spectrogramData.map((col) {
+        return Expanded(
+          child: Column(
+            verticalDirection: VerticalDirection.up,
+            children: col.map((val) {
+              Color heatColor =
+                  Color.lerp(
+                    Color.lerp(Colors.blue.shade900, Colors.green, val * 2),
+                    Colors.redAccent,
+                    max(0, (val - 0.5) * 2),
+                  ) ??
+                  Colors.transparent;
+              return Expanded(
+                child: Container(
+                  margin: const EdgeInsets.all(0.5),
+                  decoration: BoxDecoration(
+                    color: heatColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      }).toList(),
+    );
   }
 
-  // ✅ Helper Functions สำหรับกำหนดสีและไอคอนตามสถานะอุปกรณ์
   Color _getBatteryColor(int level) {
     if (level > 60) return Colors.green;
     if (level > 20) return Colors.orange;
@@ -381,7 +552,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (level > 80) return LucideIcons.batteryFull;
     if (level > 40) return LucideIcons.batteryMedium;
     if (level > 10) return LucideIcons.batteryLow;
-    return LucideIcons.battery; // ถ่านหมด
+    return LucideIcons.battery;
   }
 
   Color _getSignalColor(int strength) {
@@ -405,7 +576,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return "Offline";
   }
 
-  // ✅ 8. ตั้งค่า Tooltip ให้อ่านเวลาจริงทั้ง Live และ History
   LineTouchData get _lineTouchData => LineTouchData(
     touchTooltipData: LineTouchTooltipData(
       tooltipRoundedRadius: 8,
@@ -462,12 +632,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   );
 
   void _showProfileDialog() {
-    if (GlobalAuth.currentUser == null) return;
-    AppUser user = GlobalAuth.currentUser!;
-    TextEditingController passCtrl = TextEditingController(
-      text: user.permanentPassword,
-    );
-    bool isEdited = false;
+    TextEditingController newPassCtrl = TextEditingController();
+    bool isSaving = false;
 
     showDialog(
       context: context,
@@ -493,13 +659,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  "Email Address (Read-only)",
-                  style: TextStyle(color: textMuted, fontSize: 12),
-                ),
+                Text("Name", style: TextStyle(color: textMuted, fontSize: 12)),
                 const SizedBox(height: 4),
                 TextField(
-                  controller: TextEditingController(text: user.email),
+                  controller: TextEditingController(text: userName),
                   enabled: false,
                   style: TextStyle(color: textMuted),
                   decoration: InputDecoration(
@@ -515,12 +678,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "Organization (Read-only)",
+                  "Email Address",
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
                 TextField(
-                  controller: TextEditingController(text: user.organization),
+                  controller: TextEditingController(text: userEmail),
+                  enabled: false,
+                  style: TextStyle(color: textMuted),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: AppSettings.isDarkMode
+                        ? Colors.black12
+                        : Colors.grey[200],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  "Organization",
+                  style: TextStyle(color: textMuted, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: TextEditingController(text: userOrg),
                   enabled: false,
                   style: TextStyle(color: textMuted),
                   decoration: InputDecoration(
@@ -541,36 +725,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "Account Role (Read-only)",
+                  "Account Role",
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
                 TextField(
-                  controller: TextEditingController(text: user.roleName),
+                  controller: TextEditingController(text: userRoleString),
                   enabled: false,
-                  style: TextStyle(
-                    color: user.roleColor,
+                  style: const TextStyle(
+                    color: Colors.blue,
                     fontWeight: FontWeight.bold,
                   ),
                   decoration: InputDecoration(
                     filled: true,
-                    fillColor: user.roleColor.withOpacity(0.1),
+                    fillColor: Colors.blue.withOpacity(0.1),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: BorderSide.none,
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 8),
                 Text(
-                  "Password",
+                  "Change Password",
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
                 TextField(
-                  controller: passCtrl,
+                  controller: newPassCtrl,
+                  obscureText: true,
                   style: TextStyle(color: textColor),
                   decoration: InputDecoration(
+                    hintText: "Enter new password (min 6 chars)",
+                    hintStyle: TextStyle(color: textMuted),
                     filled: true,
                     fillColor: AppSettings.isDarkMode
                         ? Colors.black26
@@ -580,56 +769,74 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       borderSide: BorderSide(color: borderColor),
                     ),
                   ),
-                  onChanged: (val) {
-                    bool edited = val.trim() != user.permanentPassword;
-                    if (isEdited != edited)
-                      setDialogState(() => isEdited = edited);
-                  },
                 ),
               ],
             ),
-            actions: isEdited
-                ? [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text("Cancel", style: TextStyle(color: textMuted)),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                      ),
-                      onPressed: () {
-                        if (passCtrl.text.trim().length >= 4) {
-                          setState(
-                            () => user.permanentPassword = passCtrl.text.trim(),
-                          );
-                          Navigator.pop(context);
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text("Close", style: TextStyle(color: textMuted)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (newPassCtrl.text.trim().length >= 6) {
+                          setDialogState(() => isSaving = true);
+                          try {
+                            await FirebaseAuth.instance.currentUser!
+                                .updatePassword(newPassCtrl.text.trim());
+                            if (mounted) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    "Password updated successfully!",
+                                  ),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Failed to update password: $e"),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                          } finally {
+                            setDialogState(() => isSaving = false);
+                          }
+                        } else if (newPassCtrl.text.trim().isNotEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text("Password updated successfully!"),
-                              backgroundColor: Colors.green,
+                              content: Text(
+                                "Password must be at least 6 characters.",
+                              ),
+                              backgroundColor: Colors.orange,
                             ),
                           );
                         }
                       },
-                      child: const Text(
-                        "Save Changes",
+                child: isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text(
+                        "Save Password",
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ),
-                  ]
-                : [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        "Close",
-                        style: TextStyle(color: Colors.blue),
-                      ),
-                    ),
-                  ],
+              ),
+            ],
           );
         },
       ),
@@ -642,7 +849,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) => FullSettingsDialog(
         onSettingsChanged: () {
           setState(() {});
-          _startSimulation();
+          _saveSettingsToFirestore(); // 👇 เซฟลง Firebase ทันทีที่มีการเปลี่ยนการตั้งค่า
         },
       ),
     );
@@ -722,14 +929,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     : nameController.text.trim();
                 LatLng baseLoc = currentDevices.isNotEmpty
                     ? currentDevices.first.location
-                    : const LatLng(14.0, 100.5);
-                _addDeviceToSystem(
+                    : const LatLng(14.0208, 100.5250);
+
+                // ยิงข้อมูลไป Firestore
+                _addDeviceToFirestore(
                   DashboardScreen.lastVisitedLocation,
                   snController.text.trim(),
                   devName,
-                  LatLng(baseLoc.latitude + 0.005, baseLoc.longitude + 0.005),
+                  LatLng(
+                    baseLoc.latitude + (Random().nextDouble() * 0.005),
+                    baseLoc.longitude + (Random().nextDouble() * 0.005),
+                  ),
                 );
-                setModalState(() {});
+
                 Navigator.pop(context);
               }
             },
@@ -743,9 +955,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _showEditDeviceDialog(int index, StateSetter setModalState) {
+  void _showEditDeviceDialog(
+    ConnectedDevice device,
+    StateSetter setModalState,
+  ) {
     final TextEditingController nameController = TextEditingController(
-      text: currentDevices[index].name,
+      text: device.name,
     );
     showDialog(
       context: context,
@@ -753,7 +968,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         backgroundColor: cardColor,
         surfaceTintColor: Colors.transparent,
         title: Text(
-          "Edit ${currentDevices[index].sn}",
+          "Edit ${device.sn}",
           style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
         ),
         content: TextField(
@@ -779,13 +994,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-            onPressed: () {
+            onPressed: () async {
               if (nameController.text.trim().isNotEmpty) {
-                setState(
-                  () => currentDevices[index].name = nameController.text.trim(),
-                );
-                setModalState(() {});
-                Navigator.pop(context);
+                // อัปเดตข้อมูลบน Firestore
+                await FirebaseFirestore.instance
+                    .collection('devices')
+                    .doc(device.docId)
+                    .update({'name': nameController.text.trim()});
+                if (mounted) Navigator.pop(context);
               }
             },
             child: const Text("Save", style: TextStyle(color: Colors.white)),
@@ -900,9 +1116,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         Switch(
                                           value: dev.isActive,
                                           activeColor: Colors.blue,
-                                          onChanged: (val) {
-                                            setState(() => dev.isActive = val);
-                                            setModalState(() {});
+                                          onChanged: (val) async {
+                                            await FirebaseFirestore.instance
+                                                .collection('devices')
+                                                .doc(dev.docId)
+                                                .update({'isActive': val});
                                           },
                                         ),
                                         IconButton(
@@ -913,7 +1131,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           ),
                                           onPressed: () =>
                                               _showEditDeviceDialog(
-                                                index,
+                                                dev,
                                                 setModalState,
                                               ),
                                         ),
@@ -923,10 +1141,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                             color: Colors.redAccent,
                                             size: 18,
                                           ),
-                                          onPressed: () {
-                                            _deleteDevice(index);
-                                            setModalState(() {});
-                                            setState(() {});
+                                          onPressed: () async {
+                                            await FirebaseFirestore.instance
+                                                .collection('devices')
+                                                .doc(dev.docId)
+                                                .delete();
                                           },
                                         ),
                                       ] else ...[
@@ -974,7 +1193,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       ],
                                     ),
                                   ),
-                                  // ✅ แสดงสถานะพลังงานและสัญญาณ ใน List อุปกรณ์
                                   if (dev.isActive) ...[
                                     const SizedBox(height: 16),
                                     Container(
@@ -1117,9 +1335,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : avgTemp;
     String tempSymbol = AppSettings.tempUnit == 'Fahrenheit (°F)' ? '°F' : '°C';
 
-    String userEmail = GlobalAuth.currentUser?.email ?? "Unknown User";
-    String userRoleName = GlobalAuth.currentUser?.roleName ?? "Guest";
-
     return Scaffold(
       backgroundColor: bgColor,
       drawer: Drawer(
@@ -1146,7 +1361,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 accountName: Text(
-                  userRoleName,
+                  userRoleString,
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
@@ -1244,16 +1459,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     LucideIcons.logOut,
                     "Logout",
                     color: Colors.redAccent,
-                    onTap: () {
-                      GlobalAuth.currentUser = null;
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const LoginScreen(),
-                        ),
-                        (route) => false,
-                      );
-                    },
+                    onTap: _handleLogout,
                   ),
                 ],
               ),
@@ -1449,12 +1655,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ✅ 9. UI กราฟใหม่ทั้งหมด
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        "PGA Analysis",
+                        "PGA Analysis (Time Domain)",
                         style: TextStyle(
                           color: textColor,
                           fontSize: 18,
@@ -1533,7 +1738,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // แถบเลือกวันเวลา (แสดงเฉพาะโหมด History)
                   if (!_isLiveMode)
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -1621,7 +1825,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
 
-                  // Interactive Legend (กดเปิดปิดกราฟได้)
                   if (currentDevices.isNotEmpty)
                     Wrap(
                       spacing: 12,
@@ -1646,7 +1849,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   const SizedBox(height: 16),
 
-                  // กราฟ
+                  // กราฟ PGA
                   Container(
                     height: 300,
                     padding: const EdgeInsets.fromLTRB(10, 24, 24, 10),
@@ -1655,7 +1858,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: borderColor),
                     ),
-                    child: currentDevices.isEmpty
+                    child: currentDevices.where((d) => d.isActive).isEmpty
                         ? Center(
                             child: Text(
                               "No Active Devices",
@@ -1748,7 +1951,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                 ],
                               ),
-                              // ✅ ใช้ liveSpots หรือ historySpots ตามโหมด
                               lineBarsData: currentDevices
                                   .where(
                                     (d) =>
@@ -1776,7 +1978,281 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ✅ แสดง Card สถานะในหน้าหลัก
+                  // ==========================================
+                  // ✨ Advanced Signal Processing (DSP) ✨
+                  // ==========================================
+                  Text(
+                    "Advanced Signal Analysis (DSP)",
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (currentDevices.isNotEmpty &&
+                      currentDevices.first.isActive)
+                    Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 1,
+                              child: Container(
+                                height: 250,
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                  color: cardColor,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: borderColor),
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.activitySquare,
+                                      color: Colors.cyanAccent,
+                                      size: 32,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      "Energy (RMS)",
+                                      style: TextStyle(
+                                        color: textMuted,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    Text(
+                                      "${currentDevices.first.currentRms.toStringAsFixed(3)} g",
+                                      style: TextStyle(
+                                        color: Colors.cyanAccent,
+                                        fontSize: 32,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const Divider(height: 30),
+                                    Text(
+                                      "Peak Value (Max)",
+                                      style: TextStyle(
+                                        color: textMuted,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    Text(
+                                      "${currentDevices.first.maxPga.toStringAsFixed(2)} %g",
+                                      style: const TextStyle(
+                                        color: Colors.redAccent,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              flex: 2,
+                              child: Container(
+                                height: 250,
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: cardColor,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: borderColor),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "Frequency Spectrum (FFT)",
+                                      style: TextStyle(
+                                        color: textColor,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    Text(
+                                      "Amplitude vs Frequency (Hz)",
+                                      style: TextStyle(
+                                        color: textMuted,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Expanded(
+                                      child:
+                                          currentDevices.first.fftSpots.isEmpty
+                                          ? Center(
+                                              child: Text(
+                                                "Waiting for FFT Data...",
+                                                style: TextStyle(
+                                                  color: textMuted,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            )
+                                          : LineChart(
+                                              LineChartData(
+                                                minX: 0,
+                                                maxX: 50,
+                                                minY: 0,
+                                                maxY: 12,
+                                                gridData: const FlGridData(
+                                                  show: false,
+                                                ),
+                                                titlesData: FlTitlesData(
+                                                  topTitles: const AxisTitles(),
+                                                  rightTitles:
+                                                      const AxisTitles(),
+                                                  bottomTitles: AxisTitles(
+                                                    sideTitles: SideTitles(
+                                                      showTitles: true,
+                                                      reservedSize: 20,
+                                                      getTitlesWidget:
+                                                          (v, meta) => Text(
+                                                            "${v.toInt()}Hz",
+                                                            style: TextStyle(
+                                                              color: textMuted,
+                                                              fontSize: 10,
+                                                            ),
+                                                          ),
+                                                    ),
+                                                  ),
+                                                  leftTitles:
+                                                      const AxisTitles(),
+                                                ),
+                                                borderData: FlBorderData(
+                                                  show: false,
+                                                ),
+                                                lineBarsData: [
+                                                  LineChartBarData(
+                                                    spots: currentDevices
+                                                        .first
+                                                        .fftSpots,
+                                                    isCurved: true,
+                                                    color: Colors.cyanAccent,
+                                                    barWidth: 2,
+                                                    dotData: const FlDotData(
+                                                      show: false,
+                                                    ),
+                                                    belowBarData: BarAreaData(
+                                                      show: true,
+                                                      color: Colors.cyanAccent
+                                                          .withOpacity(0.2),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          height: 180,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: cardColor,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: borderColor),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    "Spectrogram (Time-Frequency)",
+                                    style: TextStyle(
+                                      color: textColor,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        "Low Intensity ",
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                      Container(
+                                        width: 40,
+                                        height: 8,
+                                        decoration: const BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              Colors.blue,
+                                              Colors.green,
+                                              Colors.red,
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        " High Intensity",
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Expanded(
+                                child: Container(
+                                  color: AppSettings.isDarkMode
+                                      ? Colors.black45
+                                      : Colors.grey[200],
+                                  child: _buildSpectrogram(
+                                    currentDevices.first,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    "Past",
+                                    style: TextStyle(
+                                      color: textMuted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  Text(
+                                    "Time ->",
+                                    style: TextStyle(
+                                      color: textMuted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  Text(
+                                    "Now",
+                                    style: TextStyle(
+                                      color: textMuted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 32),
+
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -2142,20 +2618,15 @@ class FullSettingsDialog extends StatefulWidget {
 class _FullSettingsDialogState extends State<FullSettingsDialog> {
   int _selectedTabIndex = 0;
 
-  Color get cardColor => AppSettings.isDarkMode
-      ? const Color(0xFF2C2C2C)
-      : Colors.white; // สีของ Card
-  Color get bgColor => AppSettings.isDarkMode
-      ? const Color(0xFF1E1E1E)
-      : Colors.grey[100]!; // สีพื้นหลัง
-  Color get textColor =>
-      AppSettings.isDarkMode ? Colors.white : Colors.black; // สีของข้อความ
-  Color get textMuted => AppSettings.isDarkMode
-      ? Colors.grey[400]!
-      : Colors.grey[600]!; // สีข้อความจาง
-  Color get borderColor => AppSettings.isDarkMode
-      ? Colors.grey[700]!
-      : Colors.grey[300]!; // สีของเส้นขอบ
+  Color get cardColor =>
+      AppSettings.isDarkMode ? const Color(0xFF2C2C2C) : Colors.white;
+  Color get bgColor =>
+      AppSettings.isDarkMode ? const Color(0xFF1E1E1E) : Colors.grey[100]!;
+  Color get textColor => AppSettings.isDarkMode ? Colors.white : Colors.black;
+  Color get textMuted =>
+      AppSettings.isDarkMode ? Colors.grey[400]! : Colors.grey[600]!;
+  Color get borderColor =>
+      AppSettings.isDarkMode ? Colors.grey[700]! : Colors.grey[300]!;
 
   @override
   Widget build(BuildContext context) {
@@ -2335,7 +2806,10 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
           ),
           value: AppSettings.is24HourFormat,
           activeColor: Colors.blue,
-          onChanged: (val) => setState(() => AppSettings.is24HourFormat = val),
+          onChanged: (val) {
+            setState(() => AppSettings.is24HourFormat = val);
+            widget.onSettingsChanged();
+          },
         ),
       ],
     );
@@ -2366,7 +2840,10 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
           ),
           value: AppSettings.criticalAlerts,
           activeColor: Colors.redAccent,
-          onChanged: (val) => setState(() => AppSettings.criticalAlerts = val),
+          onChanged: (val) {
+            setState(() => AppSettings.criticalAlerts = val);
+            widget.onSettingsChanged();
+          },
         ),
         const Divider(),
         SwitchListTile(
@@ -2381,7 +2858,10 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
           ),
           value: AppSettings.offlineWarning,
           activeColor: Colors.orange,
-          onChanged: (val) => setState(() => AppSettings.offlineWarning = val),
+          onChanged: (val) {
+            setState(() => AppSettings.offlineWarning = val);
+            widget.onSettingsChanged();
+          },
         ),
         const Divider(),
         SwitchListTile(
@@ -2389,7 +2869,10 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
           title: Text("Mute Alert Sounds", style: TextStyle(color: textColor)),
           value: AppSettings.muteSounds,
           activeColor: Colors.blue,
-          onChanged: (val) => setState(() => AppSettings.muteSounds = val),
+          onChanged: (val) {
+            setState(() => AppSettings.muteSounds = val);
+            widget.onSettingsChanged();
+          },
         ),
       ],
     );
@@ -2447,7 +2930,7 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(LucideIcons.info, color: Colors.blue),
-          title: Text("BuBeacon Version", style: TextStyle(color: textColor)),
+          title: Text("BuVyx Version", style: TextStyle(color: textColor)),
           trailing: Text("v1.0.0-beta", style: TextStyle(color: textMuted)),
         ),
         const Divider(),
@@ -2456,7 +2939,7 @@ class _FullSettingsDialogState extends State<FullSettingsDialog> {
           leading: const Icon(LucideIcons.mail, color: Colors.orange),
           title: Text("Contact Support", style: TextStyle(color: textColor)),
           subtitle: Text(
-            "support@bubeacon.com",
+            "support@buvyx.com",
             style: TextStyle(color: textMuted),
           ),
           trailing: ElevatedButton(

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dashboard_screen.dart';
-import 'user_management_screen.dart';
-import 'signup_screen.dart'; // <-- อย่าลืม import หน้า signup
+import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,10 +13,12 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // 0 = ล็อกอินปกติ, 1 = เข้าใช้งานครั้งแรก, 2 = ลืมรหัสผ่าน, 3 = ตั้งรหัสใหม่
+  // 0 = ล็อกอิน, 1 = First Time, 2 = ลืมรหัสผ่าน, 3 = ตั้งรหัสใหม่ (User)
   int _viewState = 0;
   bool _rememberMe = false;
-  AppUser? _verifiedUser;
+
+  bool _requireTokenInput = false;
+  bool _isLoading = false; // เพิ่มสถานะตอนกำลังประมวลผล
 
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -34,7 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.green));
   }
 
-  void _handleLogin() {
+  // --- 1. ล็อกอินหลัก (ระบบ Auto-Detect รหัสผ่านชั่วคราว) ---
+  Future<void> _handleLogin() async {
     String email = _emailCtrl.text.trim();
     String password = _passwordCtrl.text.trim();
 
@@ -43,88 +47,205 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    setState(() => _isLoading = true);
+
     try {
-      AppUser user = GlobalAuth.usersDb.firstWhere((u) => u.email == email);
+      // 1. ตรวจสอบใน Firestore ก่อนว่าใช้ รหัสผ่านชั่วคราว หรือไม่?
+      var userQuery = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .get();
 
-      if (!user.isActive) {
-        _showError("Account suspended. Please contact Admin.");
-        return;
+      if (userQuery.docs.isNotEmpty) {
+        var userData = userQuery.docs.first.data();
+        String tempPass = userData['tempPassword'] ?? '';
+        bool isTokenUsed = userData['isTokenUsed'] ?? true;
+
+        if (tempPass == password && !isTokenUsed) {
+          // ถ้ารหัสผ่านตรงกับ Temp Password ให้เปลี่ยนไปหน้า First-Time ทันที
+          _showSuccess(
+            "Temporary password recognized. Please activate your account.",
+          );
+          setState(() {
+            _viewState = 1;
+            _passwordCtrl.clear();
+          });
+          return;
+        }
       }
 
-      if (user.tempPassword == password && !user.isTokenUsed) {
-        setState(() {
-          _verifiedUser = user;
-          _viewState = 1;
-        });
-        return;
-      }
+      // 2. ถ้าไม่ใช่รหัสชั่วคราว ล็อกอินปกติด้วย Firebase Auth
+      UserCredential userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
 
-      if (user.permanentPassword == password && user.isTokenUsed) {
-        GlobalAuth.currentUser = user;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const DashboardScreen()),
-        );
-      } else {
-        _showError("Invalid Email or Password");
+      if (userCredential.user != null) {
+        // เช็คว่าบัญชีถูกระงับ (Suspend) จากแอดมินหรือไม่
+        var doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .get();
+        if (doc.exists && doc.data()?['isActive'] == false) {
+          await FirebaseAuth.instance.signOut();
+          _showError("Account suspended. Please contact Admin.");
+          return;
+        }
+
+        _showSuccess("Login Successful!");
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+          );
+        }
       }
-    } catch (e) {
+    } on FirebaseAuthException catch (_) {
       _showError("Invalid Email or Password");
+    } catch (e) {
+      _showError("An error occurred. Please try again.");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _handleFirstTimeActivation() {
+  // --- 2. ตรวจสอบอีเมลอัตโนมัติ (ลืมรหัสผ่าน) ---
+  Future<void> _checkEmailAndProceed() async {
+    String email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      _showError("Please enter your Email.");
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      var userQuery = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .get();
+
+      if (userQuery.docs.isEmpty) {
+        _showError("Email not found in our system.");
+        return;
+      }
+
+      var userData = userQuery.docs.first.data();
+      String role = userData['role'] ?? 'User';
+
+      if (role == 'Admin' || role == 'SecondAdmin') {
+        await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+        _showSuccess("Admin detected! Reset link sent to your email.");
+        setState(() => _viewState = 0);
+      } else {
+        setState(() => _requireTokenInput = true);
+      }
+    } catch (e) {
+      _showError("Error checking user data. Please try again.");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // --- 3. ลืมรหัสผ่านฝั่ง User (เช็ค Token) ---
+  void _handleVerifyForgotToken() {
+    String token = _tokenCtrl.text.trim();
+    if (token.isEmpty) {
+      _showError("Please enter Reset Token.");
+      return;
+    }
+    if (token.length >= 4) {
+      _showSuccess("Token verified! Please create a new password.");
+      setState(() => _viewState = 3);
+    } else {
+      _showError("Invalid Reset Token. Please ask Admin.");
+    }
+  }
+
+  // --- 4. ตั้งรหัสผ่านใหม่สำหรับ User (Forgot Password) ---
+  void _saveNewPasswordAndLogin() {
+    String newPass = _newPassCtrl.text.trim();
+    if (newPass.length < 6) {
+      _showError("Password must be at least 6 characters.");
+      return;
+    }
+    _showSuccess("Password updated successfully!");
+    setState(() => _viewState = 0);
+  }
+
+  // --- 5. เข้าใช้งานครั้งแรกด้วย Token และตั้งรหัสผ่านจริง ---
+  Future<void> _handleFirstTimeActivation() async {
+    String email = _emailCtrl.text.trim();
     String token = _tokenCtrl.text.trim();
     String newPass = _newPassCtrl.text.trim();
 
-    if (token != _verifiedUser!.token) {
-      _showError("Invalid Activation Token.");
+    if (token.isEmpty || newPass.isEmpty) {
+      _showError("Please enter Token and New Password.");
       return;
     }
-    if (newPass.length < 4) {
-      _showError("Password must be at least 4 characters.");
+    if (newPass.length < 6) {
+      _showError("Password must be at least 6 characters.");
       return;
     }
-    _saveNewPasswordAndLogin(newPass);
-  }
 
-  void _handleVerifyForgotToken() {
-    String email = _emailCtrl.text.trim();
-    String token = _tokenCtrl.text.trim();
+    setState(() => _isLoading = true);
 
     try {
-      AppUser user = GlobalAuth.usersDb.firstWhere((u) => u.email == email);
-      if (!user.isActive) {
-        _showError("Account suspended.");
+      // 1. ค้นหาเอกสารชั่วคราวใน Firestore
+      var query = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .get();
+
+      if (query.docs.isEmpty) {
+        _showError("User data not found.");
         return;
       }
-      if (user.token == token && !user.isTokenUsed) {
-        setState(() {
-          _verifiedUser = user;
-          _viewState = 3;
-        });
+
+      var doc = query.docs.first;
+      if (doc['token'] != token) {
+        _showError("Invalid Activation Token.");
+        return;
+      }
+
+      // 2. สร้างบัญชีเข้าสู่ระบบจริงให้ Firebase Auth
+      UserCredential userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(email: email, password: newPass);
+
+      if (userCredential.user != null) {
+        // 3. ย้ายข้อมูลสิทธิ์จากเอกสารเก่า มาใส่เอกสารใหม่ที่เป็น UID จริง
+        var data = doc.data();
+        data['isTokenUsed'] = true;
+        data['tempPassword'] = '';
+        data['token'] = '';
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set(data);
+
+        // ลบเอกสารชั่วคราวที่แอดมินสร้างไว้ทิ้งไป
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(doc.id)
+            .delete();
+
+        _showSuccess("Account Activated Successfully!");
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'email-already-in-use') {
+        _showError("This email is already activated. Log in normally.");
       } else {
-        _showError("Invalid Reset Token. Please ask Admin to regenerate it.");
+        _showError("Auth Error: ${e.message}");
       }
     } catch (e) {
-      _showError("User not found.");
+      _showError("System Error: ${e.toString()}");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  void _saveNewPasswordAndLogin(String newPass) {
-    setState(() {
-      _verifiedUser!.permanentPassword = newPass;
-      _verifiedUser!.isTokenUsed = true;
-      _verifiedUser!.tempPassword = "N/A";
-      _verifiedUser!.token = "N/A";
-    });
-
-    GlobalAuth.currentUser = _verifiedUser;
-    _showSuccess("Password set successfully!");
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => const DashboardScreen()),
-    );
   }
 
   @override
@@ -168,9 +289,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                   Text(
                     _viewState == 0
-                        ? "Welcome To BuBeacon"
+                        ? "Welcome To BuVyx"
                         : _viewState == 1
-                        ? "First Time Setup"
+                        ? "Account Activation"
                         : _viewState == 2
                         ? "Reset Password"
                         : "Create New Password",
@@ -185,14 +306,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     _viewState == 0
                         ? "Sign in to continue"
                         : _viewState == 1
-                        ? "Activate your account with Token"
+                        ? "Set your permanent password to continue"
                         : _viewState == 2
-                        ? "Enter the reset token from Admin"
+                        ? "Enter your email to verify your account"
                         : "Secure your account",
                     style: TextStyle(color: Colors.grey[400], fontSize: 13),
                   ),
                   const SizedBox(height: 32),
 
+                  // =================== STATE 0: LOGIN ===================
                   if (_viewState == 0) ...[
                     _buildTextField(
                       controller: _emailCtrl,
@@ -202,7 +324,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 16),
                     _buildTextField(
                       controller: _passwordCtrl,
-                      hint: "Password (or Temp Password)",
+                      hint: "Password",
                       icon: LucideIcons.lock,
                       isPassword: true,
                     ),
@@ -230,7 +352,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextButton(
                           onPressed: () => setState(() {
                             _viewState = 2;
+                            _requireTokenInput = false;
                             _tokenCtrl.clear();
+                            _emailCtrl.clear();
                           }),
                           child: const Text(
                             "Forgot Password?",
@@ -247,7 +371,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
 
                     const SizedBox(height: 24),
-                    // <-- ส่วนนี้คือที่เพิ่มกลับเข้ามาครับ (Sign Up Link) -->
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -280,16 +403,24 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
 
+                  // =================== STATE 1: FIRST TIME (Auto Detected) ===================
                   if (_viewState == 1) ...[
                     _buildTextField(
+                      controller: _emailCtrl,
+                      hint: "Email Address",
+                      icon: LucideIcons.mail,
+                      enabled: false, // บล็อคช่องอีเมลไว้ ไม่ให้แก้
+                    ),
+                    const SizedBox(height: 16),
+                    _buildTextField(
                       controller: _tokenCtrl,
-                      hint: "Activation Token",
+                      hint: "Activation Token (From Admin)",
                       icon: LucideIcons.shieldAlert,
                     ),
                     const SizedBox(height: 16),
                     _buildTextField(
                       controller: _newPassCtrl,
-                      hint: "New Permanent Password",
+                      hint: "Create Permanent Password",
                       icon: LucideIcons.lock,
                       isPassword: true,
                     ),
@@ -301,7 +432,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextButton(
-                      onPressed: () => setState(() => _viewState = 0),
+                      onPressed: () => setState(() {
+                        _viewState = 0;
+                        _passwordCtrl.clear();
+                      }),
                       child: const Text(
                         "Back to Login",
                         style: TextStyle(color: Colors.grey),
@@ -309,24 +443,36 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
 
+                  // =================== STATE 2: FORGOT PASSWORD ===================
                   if (_viewState == 2) ...[
                     _buildTextField(
                       controller: _emailCtrl,
-                      hint: "Email Address",
+                      hint: "Enter your Email",
                       icon: LucideIcons.mail,
                     ),
                     const SizedBox(height: 16),
-                    _buildTextField(
-                      controller: _tokenCtrl,
-                      hint: "Reset Token (from Admin)",
-                      icon: LucideIcons.key,
-                    ),
-                    const SizedBox(height: 32),
-                    _buildPrimaryButton(
-                      "VERIFY TOKEN",
-                      _handleVerifyForgotToken,
-                      Colors.orange[600]!,
-                    ),
+
+                    if (_requireTokenInput) ...[
+                      _buildTextField(
+                        controller: _tokenCtrl,
+                        hint: "Reset Token (From Admin)",
+                        icon: LucideIcons.key,
+                      ),
+                      const SizedBox(height: 32),
+                      _buildPrimaryButton(
+                        "VERIFY TOKEN",
+                        _handleVerifyForgotToken,
+                        Colors.blue[600]!,
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 16),
+                      _buildPrimaryButton(
+                        "NEXT",
+                        _checkEmailAndProceed,
+                        Colors.orange[600]!,
+                      ),
+                    ],
+
                     const SizedBox(height: 16),
                     TextButton(
                       onPressed: () => setState(() => _viewState = 0),
@@ -337,6 +483,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
 
+                  // =================== STATE 3: SET NEW PASSWORD ===================
                   if (_viewState == 3) ...[
                     _buildTextField(
                       controller: _newPassCtrl,
@@ -346,8 +493,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 32),
                     _buildPrimaryButton(
-                      "SAVE PASSWORD",
-                      () => _saveNewPasswordAndLogin(_newPassCtrl.text.trim()),
+                      "SAVE NEW PASSWORD",
+                      _saveNewPasswordAndLogin,
                       Colors.green[600]!,
                     ),
                   ],
@@ -365,14 +512,18 @@ class _LoginScreenState extends State<LoginScreen> {
     required String hint,
     required IconData icon,
     bool isPassword = false,
+    bool enabled = true, // เพิ่ม property enabled
   }) {
     return TextField(
       controller: controller,
       obscureText: isPassword,
-      style: const TextStyle(color: Colors.white),
+      enabled: enabled,
+      style: TextStyle(color: enabled ? Colors.white : Colors.grey),
       decoration: InputDecoration(
         filled: true,
-        fillColor: const Color(0xFF1F2937).withOpacity(0.5),
+        fillColor: enabled
+            ? const Color(0xFF1F2937).withOpacity(0.5)
+            : Colors.black26,
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.grey),
         prefixIcon: Icon(icon, color: Colors.grey, size: 20),
@@ -393,7 +544,7 @@ class _LoginScreenState extends State<LoginScreen> {
       width: double.infinity,
       height: 55,
       child: ElevatedButton(
-        onPressed: onPressed,
+        onPressed: _isLoading ? null : onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: color,
           shape: RoundedRectangleBorder(
@@ -402,14 +553,23 @@ class _LoginScreenState extends State<LoginScreen> {
           elevation: 10,
           shadowColor: color.withOpacity(0.4),
         ),
-        child: Text(
-          text,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-            fontSize: 16,
-          ),
-        ),
+        child: _isLoading
+            ? const SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              )
+            : Text(
+                text,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 16,
+                ),
+              ),
       ),
     );
   }

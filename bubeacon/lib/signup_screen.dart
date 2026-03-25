@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'email_verification_screen.dart';
 
 class SignUpScreen extends StatefulWidget {
@@ -16,6 +18,96 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _agreeTerms = false;
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _orgController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  Future<void> _handleSignUp() async {
+    String name = _nameController.text.trim();
+    String org = _orgController.text.trim();
+    String email = _emailController.text.trim();
+    String password = _passwordController.text.trim();
+    String confirmPassword = _confirmPasswordController.text.trim();
+
+    if (name.isEmpty || org.isEmpty || email.isEmpty || password.isEmpty) {
+      _showError("Please fill in all fields.");
+      return;
+    }
+    if (password.length < 6) {
+      _showError("Password must be at least 6 characters.");
+      return;
+    }
+    if (password != confirmPassword) {
+      _showError("Passwords do not match.");
+      return;
+    }
+    if (!_agreeTerms) {
+      _showError("You must agree to the Terms & Conditions.");
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      UserCredential userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(email: email, password: password);
+
+      if (userCredential.user != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set({
+              'email': email,
+              'name': name,
+              'organization': org,
+              'role': 'Admin',
+              'isActive': true,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EmailVerificationScreen(email: email),
+            ),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'email-already-in-use') {
+        _showError("The account already exists for that email.");
+      } else if (e.code == 'invalid-email') {
+        _showError("The email address is badly formatted.");
+      } else {
+        _showError("Auth Error: ${e.message}");
+      }
+    } catch (e) {
+      _showError("System Error: ${e.toString()}");
+      print("===== FULL ERROR LOG =====");
+      print(e.toString());
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -52,13 +144,12 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    "Join BuBeacon - Vibration Detection Device",
+                    "Join BuVyx - Vibration Detection Device",
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey, fontSize: 14),
                   ),
                   const SizedBox(height: 32),
 
-                  // Inputs
                   _buildInput(
                     controller: _nameController,
                     hint: "Full Name",
@@ -93,7 +184,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Terms & Conditions
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -135,29 +225,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
                   const SizedBox(height: 32),
 
-                  // Continue Button
                   SizedBox(
                     width: double.infinity,
                     height: 55,
                     child: ElevatedButton(
-                      onPressed: () {
-                        // 1. ตรวจสอบข้อมูลเบื้องต้น (เช่น รหัสผ่านตรงกันไหม)
-                        if (_passwordController.text !=
-                            _confirmPasswordController.text) {
-                          // พ่น Error แจ้งเตือน
-                          return;
-                        }
-
-                        // 2. นำทางไปหน้ายืนยันอีเมล
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => EmailVerificationScreen(
-                              email: _emailController.text,
-                            ),
-                          ),
-                        );
-                      },
+                      onPressed: _isLoading ? null : _handleSignUp,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blue[600],
                         shape: RoundedRectangleBorder(
@@ -165,19 +237,27 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         ),
                         elevation: 8,
                       ),
-                      child: const Text(
-                        "CONTINUE",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
+                      child: _isLoading
+                          ? const SizedBox(
+                              height: 24,
+                              width: 24,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Text(
+                              "CONTINUE",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
                     ),
                   ),
 
                   const SizedBox(height: 24),
 
-                  // Back to Login
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [

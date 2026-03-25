@@ -1,12 +1,36 @@
 import 'dart:ui';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_maps/maps.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dashboard_screen.dart';
+
+// ==========================================
+// คลาสสำหรับเก็บข้อมูล Marker บนแผนที่
+// ==========================================
+class MapDeviceMarker {
+  final String id;
+  final String name;
+  final String sn;
+  final String zone;
+  final double lat;
+  final double lng;
+  final bool isActive;
+
+  MapDeviceMarker({
+    required this.id,
+    required this.name,
+    required this.sn,
+    required this.zone,
+    required this.lat,
+    required this.lng,
+    required this.isActive,
+  });
+}
 
 class ThailandMapScreen extends StatefulWidget {
   const ThailandMapScreen({super.key});
-  static Map<String, List<String>> savedLocations = {};
 
   @override
   State<ThailandMapScreen> createState() => _ThailandMapScreenState();
@@ -29,7 +53,10 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
   late Animation<Offset> _panelSlideAnimation;
   String? _selectedProvinceForPanel;
 
-  // ✅ เพิ่มพิกัด (lat, lng) เพื่อให้แผนที่รู้จุดโฟกัสเวลา Zoom In
+  // --- ตัวแปรสำหรับข้อมูลอุปกรณ์จริงจาก Firestore ---
+  List<MapDeviceMarker> _realDevices = [];
+  StreamSubscription<QuerySnapshot>? _deviceSubscription;
+
   final List<Map<String, dynamic>> _provinces = [
     {"name": "Amnat Charoen", "area": 3161.0, "lat": 15.8657, "lng": 104.6258},
     {"name": "Ang Thong", "area": 968.0, "lat": 14.5896, "lng": 100.4550},
@@ -239,13 +266,71 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
       minZoomLevel: 0.8,
       maxZoomLevel: 15,
     );
+
+    // เริ่มดึงข้อมูลจาก Database
+    _listenToRealDevices();
   }
 
   @override
   void dispose() {
     _panelController.dispose();
     _searchController.dispose();
+    _deviceSubscription?.cancel();
     super.dispose();
+  }
+
+  // ==========================================
+  // ✅ ระบบดึงหมุดพิกัดจริงแบบไม่ทำให้ Map พัง
+  // ==========================================
+  void _listenToRealDevices() {
+    _deviceSubscription = FirebaseFirestore.instance
+        .collection('devices')
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) return;
+
+          final newDevices = snapshot.docs.map((doc) {
+            final data = doc.data();
+            return MapDeviceMarker(
+              id: doc.id,
+              name: data['name'] ?? 'Unknown',
+              sn: data['sn'] ?? '',
+              zone: data['zone'] ?? 'Unknown',
+              lat: (data['lat'] ?? 0.0).toDouble(),
+              lng: (data['lng'] ?? 0.0).toDouble(),
+              isActive: data['isActive'] ?? false,
+            );
+          }).toList();
+
+          setState(() {
+            _realDevices = newDevices;
+          });
+
+          // ใช้ Controller สั่งเพิ่ม/เคลียร์หมุดแทนการเปลี่ยน Key แผนที่
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              try {
+                _layerController.clearMarkers();
+                for (int i = 0; i < _realDevices.length; i++) {
+                  _layerController.insertMarker(i);
+                }
+              } catch (e) {
+                print("Marker update ignored: $e");
+              }
+            }
+          });
+        });
+  }
+
+  void _jumpToDeviceDashboard(MapDeviceMarker device) {
+    DashboardScreen.lastVisitedLocation = device.zone;
+    if (!DashboardScreen.recentLocations.contains(device.zone)) {
+      DashboardScreen.recentLocations.insert(0, device.zone);
+    }
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const DashboardScreen()),
+    );
   }
 
   Color get textColor => Colors.white;
@@ -287,13 +372,11 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
       _selectedProvinceForPanel = provinceName;
       if (index != -1) {
         _selectedIndex = index;
-
-        // 🚀 สั่งแผนที่ให้ซูมเข้าไปใกล้ๆ จังหวัดนั้น!
         _zoomPanBehavior.focalLatLng = MapLatLng(
           _provinces[index]['lat'],
           _provinces[index]['lng'],
         );
-        _zoomPanBehavior.zoomLevel = 4.5; // ระดับการซูม (ปรับได้ตามชอบ)
+        _zoomPanBehavior.zoomLevel = 4.5;
       }
       _isSearching = false;
       _searchController.clear();
@@ -308,13 +391,8 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
       setState(() {
         _selectedProvinceForPanel = null;
         _selectedIndex = -1;
-
-        // 🔙 สั่งแผนที่ให้ซูมกลับออกมาหน้าเต็มประเทศเหมือนเดิม
-        _zoomPanBehavior.focalLatLng = const MapLatLng(
-          13.7563,
-          100.5018,
-        ); // กทม. เป็นจุดศูนย์กลาง
-        _zoomPanBehavior.zoomLevel = 1.0; // ระดับซูมเริ่มต้น
+        _zoomPanBehavior.focalLatLng = const MapLatLng(13.7563, 100.5018);
+        _zoomPanBehavior.zoomLevel = 1.0;
       });
     });
   }
@@ -359,7 +437,6 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
             child: AnimatedBuilder(
               animation: _panelController,
               builder: (context, child) {
-                // ขยับแผนที่ไปทางซ้ายเวลาเมนูด้านขวาเลื่อนออกมา
                 return Transform.translate(
                   offset: Offset(-100 * _panelController.value, 0),
                   child: child,
@@ -427,6 +504,66 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
                     tooltipSettings: const MapTooltipSettings(
                       color: Colors.transparent,
                     ),
+
+                    initialMarkersCount: _realDevices.length,
+                    markerBuilder: (BuildContext context, int index) {
+                      if (index >= _realDevices.length) {
+                        return const MapMarker(
+                          latitude: 0,
+                          longitude: 0,
+                          child: SizedBox(),
+                        );
+                      }
+
+                      final dev = _realDevices[index];
+                      return MapMarker(
+                        latitude: dev.lat,
+                        longitude: dev.lng,
+                        child: GestureDetector(
+                          onTap: () => _jumpToDeviceDashboard(dev),
+                          child: Tooltip(
+                            message:
+                                "Node: ${dev.name} (${dev.sn})\nZone: ${dev.zone}\nStatus: ${dev.isActive ? 'Online' : 'Offline'}",
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: dev.isActive
+                                    ? Colors.greenAccent
+                                    : Colors.redAccent,
+                              ),
+                            ),
+                            textStyle: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                if (dev.isActive)
+                                  Container(
+                                    width: 20,
+                                    height: 20,
+                                    decoration: BoxDecoration(
+                                      color: Colors.greenAccent.withOpacity(
+                                        0.3,
+                                      ),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                Icon(
+                                  LucideIcons.mapPin,
+                                  color: dev.isActive
+                                      ? Colors.greenAccent
+                                      : Colors.redAccent,
+                                  size: 16,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -680,6 +817,9 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
   }
 }
 
+// ==========================================
+// ✅ เมนูจัดการพื้นที่ย่อย (เชื่อมต่อ Firestore)
+// ==========================================
 class ProvinceSidePanel extends StatefulWidget {
   final String officialName;
   final String displayName;
@@ -697,8 +837,11 @@ class ProvinceSidePanel extends StatefulWidget {
 }
 
 class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
-  List<String> get locations =>
-      ThailandMapScreen.savedLocations[widget.officialName] ?? [];
+  // ✅ ดึงข้อมูลแบบ Stream (Real-time)
+  Stream<DocumentSnapshot> get _locationStream => FirebaseFirestore.instance
+      .collection('locations')
+      .doc(widget.officialName)
+      .snapshots();
 
   void _showAddLocationDialog() {
     TextEditingController locCtrl = TextEditingController();
@@ -735,15 +878,17 @@ class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-            onPressed: () {
+            onPressed: () async {
               if (locCtrl.text.trim().isNotEmpty) {
-                setState(() {
-                  ThailandMapScreen.savedLocations[widget.officialName] = [
-                    ...locations,
-                    locCtrl.text.trim(),
-                  ];
-                });
-                Navigator.pop(context);
+                // ✅ เพิ่มข้อมูลโซนใหม่เข้าไปใน Firestore (Array)
+                await FirebaseFirestore.instance
+                    .collection('locations')
+                    .doc(widget.officialName)
+                    .set({
+                      'zones': FieldValue.arrayUnion([locCtrl.text.trim()]),
+                    }, SetOptions(merge: true));
+
+                if (mounted) Navigator.pop(context);
               }
             },
             child: const Text("Save", style: TextStyle(color: Colors.white)),
@@ -753,10 +898,14 @@ class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
     );
   }
 
-  void _deleteLocation(int index) {
-    setState(() {
-      ThailandMapScreen.savedLocations[widget.officialName]!.removeAt(index);
-    });
+  void _deleteLocation(String zoneName) async {
+    // ✅ ลบข้อมูลโซนออกจาก Firestore
+    await FirebaseFirestore.instance
+        .collection('locations')
+        .doc(widget.officialName)
+        .update({
+          'zones': FieldValue.arrayRemove([zoneName]),
+        });
   }
 
   @override
@@ -799,129 +948,161 @@ class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Locations (${locations.length})",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              ElevatedButton.icon(
-                onPressed: _showAddLocationDialog,
-                icon: const Icon(
-                  LucideIcons.plus,
-                  size: 16,
-                  color: Colors.white,
-                ),
-                label: const Text("Add", style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 0,
-                  ),
-                  minimumSize: const Size(0, 36),
-                ),
-              ),
-            ],
-          ),
-        ),
+
+        // ✅ ใช้ StreamBuilder ดึงข้อมูลจาก Firestore
         Expanded(
-          child: locations.isEmpty
-              ? const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        LucideIcons.mapPinOff,
-                        size: 48,
-                        color: Colors.white24,
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        "No locations configured",
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    ],
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: locations.length,
-                  itemBuilder: (context, index) {
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
-                        ),
-                        leading: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            LucideIcons.building,
-                            color: Colors.blue,
-                            size: 18,
-                          ),
-                        ),
-                        title: Text(
-                          locations[index],
+          child: StreamBuilder<DocumentSnapshot>(
+            stream: _locationStream,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              List<String> locations = [];
+              if (snapshot.hasData && snapshot.data!.exists) {
+                final data = snapshot.data!.data() as Map<String, dynamic>?;
+                if (data != null && data['zones'] != null) {
+                  locations = List<String>.from(data['zones']);
+                }
+              }
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          "Locations (${locations.length})",
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 14,
                           ),
                         ),
-                        subtitle: const Text(
-                          "Click to enter Dashboard",
-                          style: TextStyle(color: Colors.white38, fontSize: 10),
-                        ),
-                        trailing: IconButton(
+                        ElevatedButton.icon(
+                          onPressed: _showAddLocationDialog,
                           icon: const Icon(
-                            LucideIcons.trash2,
-                            color: Colors.redAccent,
+                            LucideIcons.plus,
                             size: 16,
+                            color: Colors.white,
                           ),
-                          onPressed: () => _deleteLocation(index),
-                          tooltip: "Remove",
-                        ),
-                        onTap: () {
-                          DashboardScreen.lastVisitedLocation =
-                              locations[index];
-                          if (!DashboardScreen.recentLocations.contains(
-                            locations[index],
-                          )) {
-                            DashboardScreen.recentLocations.insert(
-                              0,
-                              locations[index],
-                            );
-                          }
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const DashboardScreen(),
+                          label: const Text(
+                            "Add",
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 0,
                             ),
-                            (route) => false,
-                          );
-                        },
-                      ),
-                    );
-                  },
-                ),
+                            minimumSize: const Size(0, 36),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: locations.isEmpty
+                        ? const Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  LucideIcons.mapPinOff,
+                                  size: 48,
+                                  color: Colors.white24,
+                                ),
+                                SizedBox(height: 16),
+                                Text(
+                                  "No locations configured",
+                                  style: TextStyle(color: Colors.white54),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: locations.length,
+                            itemBuilder: (context, index) {
+                              final zoneName = locations[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white10),
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  leading: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Icon(
+                                      LucideIcons.building,
+                                      color: Colors.blue,
+                                      size: 18,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    zoneName,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  subtitle: const Text(
+                                    "Click to enter Dashboard",
+                                    style: TextStyle(
+                                      color: Colors.white38,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  trailing: IconButton(
+                                    icon: const Icon(
+                                      LucideIcons.trash2,
+                                      color: Colors.redAccent,
+                                      size: 16,
+                                    ),
+                                    onPressed: () => _deleteLocation(zoneName),
+                                    tooltip: "Remove",
+                                  ),
+                                  onTap: () {
+                                    DashboardScreen.lastVisitedLocation =
+                                        zoneName;
+                                    if (!DashboardScreen.recentLocations
+                                        .contains(zoneName)) {
+                                      DashboardScreen.recentLocations.insert(
+                                        0,
+                                        zoneName,
+                                      );
+                                    }
+                                    Navigator.pushAndRemoveUntil(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) =>
+                                            const DashboardScreen(),
+                                      ),
+                                      (route) => false,
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ],
     );

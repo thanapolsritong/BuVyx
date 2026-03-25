@@ -1,9 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // ✅ เพิ่ม Firebase Auth
+import 'firebase_options.dart';
 import 'login_screen.dart';
+import 'dashboard_screen.dart'; // ✅ เพิ่ม Dashboard Screen
 
-void main() {
+void main() async {
+  // บอกให้ Flutter รอการตั้งค่าต่างๆ ให้เสร็จก่อน
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // ปลุก Firebase ให้เริ่มทำงานด้วยค่าจากไฟล์ options ที่เพิ่งได้มา
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   runApp(const BuBeaconApp());
 }
 
@@ -26,7 +36,7 @@ class _BuBeaconAppState extends State<BuBeaconApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'BuBeacon',
+      title: 'BuVyx Network',
       debugShowCheckedModeBanner: false,
       locale: _locale,
       // ตั้งค่าสี Dark Theme ตาม Figma/React ของคุณ
@@ -45,7 +55,41 @@ class _BuBeaconAppState extends State<BuBeaconApp> {
   }
 }
 
+// ==========================================
+// ✅ ตัวจัดการ Auto-Login (Auth Wrapper) คอยสับราง
+// ==========================================
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // ใช้ StreamBuilder ฟังสถานะการล็อกอินจาก Firebase ตลอดเวลา
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // 1. ระหว่างรอโหลดเช็คสถานะ ให้โชว์หน้าจอโหลดหมุนๆ ไปก่อน
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Color(0xFF030712),
+            body: Center(child: CircularProgressIndicator(color: Colors.blue)),
+          );
+        }
+
+        // 2. ถ้าเช็คแล้วพบว่ามีข้อมูล User (เคยล็อกอินค้างไว้) -> ทะลุไป Dashboard เลย!
+        if (snapshot.hasData) {
+          return const DashboardScreen();
+        }
+
+        // 3. ถ้าไม่มีข้อมูล (ยังไม่เคยล็อกอิน หรือกด Logout ไปแล้ว) -> ค่อยโชว์หน้า Login
+        return const LoginScreen();
+      },
+    );
+  }
+}
+
+// ==========================================
 // 1. หน้า Splash Screen
+// ==========================================
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -57,12 +101,14 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    // หน่วงเวลา 3 วินาทีแล้วไปหน้า Login เหมือนใน React Code
+    // หน่วงเวลา 3 วินาทีแล้วไปเช็คสถานะล็อกอิน (AuthWrapper)
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const LoginScreen()),
+          MaterialPageRoute(
+            builder: (context) => const AuthWrapper(),
+          ), // ✅ เปลี่ยนจาก LoginScreen เป็น AuthWrapper
         );
       }
     });
@@ -105,7 +151,7 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               const SizedBox(height: 24),
               const Text(
-                'BuBeacon',
+                'BuVyx',
                 style: TextStyle(
                   fontSize: 40,
                   fontWeight: FontWeight.bold,

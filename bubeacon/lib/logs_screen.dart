@@ -1,30 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dashboard_screen.dart'; // ดึง AppSettings มาใช้เรื่องสี
 
 // ==========================================
-// 1. Model สำหรับเก็บข้อมูล Log
-// ==========================================
-enum LogLevel { info, warning, critical }
-
-class SystemLog {
-  final String id;
-  final DateTime timestamp;
-  final LogLevel level;
-  final String source;
-  final String message;
-
-  SystemLog({
-    required this.id,
-    required this.timestamp,
-    required this.level,
-    required this.source,
-    required this.message,
-  });
-}
-
-// ==========================================
-// 2. หน้าจอ Logs Screen
+// 1. หน้าจอ Logs Screen (เชื่อมต่อ Firebase + มี Console Mode)
 // ==========================================
 class LogsScreen extends StatefulWidget {
   const LogsScreen({super.key});
@@ -34,53 +14,10 @@ class LogsScreen extends StatefulWidget {
 }
 
 class _LogsScreenState extends State<LogsScreen> {
-  // สร้างข้อมูลจำลอง (Dummy Data)
-  final List<SystemLog> _logs = [
-    SystemLog(
-      id: "L001",
-      timestamp: DateTime.now().subtract(const Duration(minutes: 5)),
-      level: LogLevel.critical,
-      source: "Sensor SN-BU-001",
-      message: "PGA exceeded safety threshold! (PGA: 15.2%g)",
-    ),
-    SystemLog(
-      id: "L002",
-      timestamp: DateTime.now().subtract(const Duration(minutes: 42)),
-      level: LogLevel.warning,
-      source: "System",
-      message: "Sensor SN-BKK-001 is offline or lost connection.",
-    ),
-    SystemLog(
-      id: "L003",
-      timestamp: DateTime.now().subtract(const Duration(hours: 2)),
-      level: LogLevel.info,
-      source: "Admin",
-      message: "Admin added a new user (staff@bubeacon.com).",
-    ),
-    SystemLog(
-      id: "L004",
-      timestamp: DateTime.now().subtract(const Duration(hours: 5)),
-      level: LogLevel.info,
-      source: "System",
-      message: "System initialized and normal operation started.",
-    ),
-    SystemLog(
-      id: "L005",
-      timestamp: DateTime.now().subtract(const Duration(days: 1)),
-      level: LogLevel.warning,
-      source: "Sensor SN-BU-001",
-      message: "High temperature detected (45.5°C).",
-    ),
-    SystemLog(
-      id: "L006",
-      timestamp: DateTime.now().subtract(const Duration(days: 1, hours: 3)),
-      level: LogLevel.info,
-      source: "Admin",
-      message: "Global chart update rate changed to 3 Seconds.",
-    ),
-  ];
-
   String _selectedFilter = 'All'; // 'All', 'Info', 'Warning', 'Critical'
+
+  // ✅ ตัวแปรสลับโหมดการแสดงผล (UI ธรรมดา หรือ Console ของ Engineer)
+  bool _isConsoleMode = false;
 
   // ดึงสีจาก Theme กลาง
   Color get bgColor =>
@@ -93,48 +30,66 @@ class _LogsScreenState extends State<LogsScreen> {
   Color get textMuted =>
       AppSettings.isDarkMode ? Colors.white54 : Colors.grey[600]!;
 
-  // จัดการสีและไอคอนตามระดับ Log
-  Color _getLogColor(LogLevel level) {
+  // จัดการสีและไอคอนตามระดับ Log ที่มาจาก Firebase
+  Color _getLogColor(String level) {
     switch (level) {
-      case LogLevel.info:
+      case 'Info':
         return Colors.blue;
-      case LogLevel.warning:
+      case 'Warning':
         return Colors.orange;
-      case LogLevel.critical:
+      case 'Critical':
         return Colors.redAccent;
+      default:
+        return Colors.grey;
     }
   }
 
-  IconData _getLogIcon(LogLevel level) {
+  // สีสำหรับโหมด Console (ให้ฟีลลิ่งแบบ Hacker/Terminal)
+  Color _getConsoleTextColor(String level) {
     switch (level) {
-      case LogLevel.info:
+      case 'Info':
+        return Colors.greenAccent;
+      case 'Warning':
+        return Colors.yellowAccent;
+      case 'Critical':
+        return Colors.redAccent;
+      default:
+        return Colors.white70;
+    }
+  }
+
+  IconData _getLogIcon(String level) {
+    switch (level) {
+      case 'Info':
         return LucideIcons.info;
-      case LogLevel.warning:
+      case 'Warning':
         return LucideIcons.alertTriangle;
-      case LogLevel.critical:
+      case 'Critical':
         return LucideIcons.alertOctagon;
+      default:
+        return LucideIcons.helpCircle;
     }
   }
 
   // ฟอร์แมตเวลาให้อ่านง่าย
-  String _formatTime(DateTime time) {
+  String _formatTime(Timestamp? timestamp) {
+    if (timestamp == null) return "Pending...";
+    final time = timestamp.toDate();
     String pad(int n) => n.toString().padLeft(2, '0');
-    return "${time.year}-${pad(time.month)}-${pad(time.day)} ${pad(time.hour)}:${pad(time.minute)}";
+    return "${time.year}-${pad(time.month)}-${pad(time.day)} ${pad(time.hour)}:${pad(time.minute)}:${pad(time.second)}";
+  }
+
+  // ==========================================
+  // ✅ ฟังก์ชันอัปเดตสถานะการรับทราบ (Acknowledge)
+  // ==========================================
+  Future<void> _markAsResolved(String docId) async {
+    await FirebaseFirestore.instance.collection('logs').doc(docId).update({
+      'isResolved': true,
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    // กรองข้อมูลตามที่เลือก
-    List<SystemLog> filteredLogs = _logs.where((log) {
-      if (_selectedFilter == 'All') return true;
-      if (_selectedFilter == 'Info' && log.level == LogLevel.info) return true;
-      if (_selectedFilter == 'Warning' && log.level == LogLevel.warning)
-        return true;
-      if (_selectedFilter == 'Critical' && log.level == LogLevel.critical)
-        return true;
-      return false;
-    }).toList();
-
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
@@ -147,6 +102,21 @@ class _LogsScreenState extends State<LogsScreen> {
         ),
         centerTitle: true,
         actions: [
+          // ✅ ปุ่มสลับโหมด Console / UI
+          IconButton(
+            tooltip: _isConsoleMode
+                ? "Switch to UI View"
+                : "Switch to Console View",
+            icon: Icon(
+              _isConsoleMode ? LucideIcons.layoutList : LucideIcons.terminal,
+              color: Colors.cyanAccent,
+            ),
+            onPressed: () {
+              setState(() {
+                _isConsoleMode = !_isConsoleMode;
+              });
+            },
+          ),
           IconButton(
             tooltip: "Export Logs",
             icon: Icon(LucideIcons.downloadCloud, color: textColor),
@@ -175,7 +145,7 @@ class _LogsScreenState extends State<LogsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      "Event History",
+                      _isConsoleMode ? "Logs Console" : "Event History",
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -183,7 +153,9 @@ class _LogsScreenState extends State<LogsScreen> {
                       ),
                     ),
                     Text(
-                      "Track system events, warnings, and alerts",
+                      _isConsoleMode
+                          ? "Raw system output and debugging logs"
+                          : "Track system events, warnings, and alerts",
                       style: TextStyle(color: textMuted, fontSize: 14),
                     ),
                   ],
@@ -204,83 +176,191 @@ class _LogsScreenState extends State<LogsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // --- ตารางแสดง Log ---
+            // --- ตารางแสดง Log (ดึงจาก Firebase แบบ Real-time) ---
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
-                  color: cardColor,
+                  color: _isConsoleMode ? Colors.black : cardColor,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: borderColor),
+                  border: Border.all(
+                    color: _isConsoleMode ? Colors.white24 : borderColor,
+                  ),
                 ),
-                child: filteredLogs.isEmpty
-                    ? Center(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('logs')
+                      .orderBy('timestamp', descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return Center(
                         child: Text(
-                          "No logs found for this filter.",
+                          "No logs found in the system.",
                           style: TextStyle(color: textMuted),
                         ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(8),
-                        itemCount: filteredLogs.length,
-                        separatorBuilder: (context, index) =>
-                            Divider(color: borderColor, height: 1),
-                        itemBuilder: (context, index) {
-                          final log = filteredLogs[index];
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            leading: CircleAvatar(
-                              backgroundColor: _getLogColor(
-                                log.level,
-                              ).withOpacity(0.1),
-                              child: Icon(
-                                _getLogIcon(log.level),
-                                color: _getLogColor(log.level),
-                                size: 20,
-                              ),
-                            ),
-                            title: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  log.source,
-                                  style: TextStyle(
-                                    color: textColor,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                Text(
-                                  _formatTime(log.timestamp),
-                                  style: TextStyle(
-                                    color: textMuted,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            subtitle: Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(
-                                log.message,
-                                style: TextStyle(
-                                  color: log.level == LogLevel.critical
-                                      ? Colors.redAccent
-                                      : textMuted,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                      );
+                    }
+
+                    final docs = snapshot.data!.docs;
+
+                    // กรองข้อมูลตามที่เลือกบน UI
+                    final filteredDocs = docs.where((doc) {
+                      if (_selectedFilter == 'All') return true;
+                      final data = doc.data() as Map<String, dynamic>;
+                      return data['type'] == _selectedFilter;
+                    }).toList();
+
+                    if (filteredDocs.isEmpty) {
+                      return Center(
+                        child: Text(
+                          "No logs match the '$_selectedFilter' filter.",
+                          style: TextStyle(color: textMuted),
+                        ),
+                      );
+                    }
+
+                    // ✅ ตรวจสอบโหมดการแสดงผล
+                    if (_isConsoleMode) {
+                      return _buildConsoleView(filteredDocs);
+                    } else {
+                      return _buildUiView(filteredDocs);
+                    }
+                  },
+                ),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  // ==========================================
+  // ✅ แสดงผลแบบ Console (สำหรับ Engineer)
+  // ==========================================
+  Widget _buildConsoleView(List<QueryDocumentSnapshot> docs) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: docs.length,
+      itemBuilder: (context, index) {
+        final doc = docs[index];
+        final data = doc.data() as Map<String, dynamic>;
+
+        final type = data['type'] ?? 'Info';
+        final isResolved = data['isResolved'] ?? false;
+        final source = data['source'] ?? 'System';
+        final zone = data['zone'] ?? 'Unknown Zone';
+        final message = data['message'] ?? 'No message';
+        final timestamp = data['timestamp'] as Timestamp?;
+
+        final timeStr = _formatTime(timestamp);
+
+        final rawLogString =
+            "[$timeStr] [${type.toUpperCase()}] [$source @ $zone] $message | RESOLVED: ${isResolved.toString().toUpperCase()}";
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: SelectableText(
+            rawLogString,
+            style: TextStyle(
+              color: _getConsoleTextColor(type),
+              fontFamily: 'Courier',
+              fontSize: 13,
+              fontWeight: type == 'Critical'
+                  ? FontWeight.bold
+                  : FontWeight.normal,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ==========================================
+  // ✅ แสดงผลแบบ UI ปกติ (สวยงาม)
+  // ==========================================
+  Widget _buildUiView(List<QueryDocumentSnapshot> docs) {
+    return ListView.separated(
+      padding: const EdgeInsets.all(8),
+      itemCount: docs.length,
+      separatorBuilder: (context, index) =>
+          Divider(color: borderColor, height: 1),
+      itemBuilder: (context, index) {
+        final doc = docs[index];
+        final data = doc.data() as Map<String, dynamic>;
+
+        final type = data['type'] ?? 'Info';
+        final isResolved = data['isResolved'] ?? false;
+        final source = data['source'] ?? 'System';
+        final message = data['message'] ?? 'No message';
+        final timestamp = data['timestamp'] as Timestamp?;
+
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 8,
+          ),
+          leading: CircleAvatar(
+            backgroundColor: _getLogColor(type).withOpacity(0.1),
+            child: Icon(_getLogIcon(type), color: _getLogColor(type), size: 20),
+          ),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                source,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              Text(
+                _formatTime(timestamp),
+                style: TextStyle(color: textMuted, fontSize: 12),
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              message,
+              style: TextStyle(
+                color: type == 'Critical' ? Colors.redAccent : textMuted,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          trailing: type != 'Info'
+              ? (isResolved
+                    ? const Icon(
+                        LucideIcons.checkCircle2,
+                        color: Colors.green,
+                        size: 20,
+                      )
+                    : ElevatedButton(
+                        onPressed: () => _markAsResolved(doc.id),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue.withOpacity(0.1),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 0,
+                          ),
+                          minimumSize: const Size(60, 30),
+                        ),
+                        child: const Text(
+                          "Acknowledge",
+                          style: TextStyle(color: Colors.blue, fontSize: 11),
+                        ),
+                      ))
+              : null,
+        );
+      },
     );
   }
 
