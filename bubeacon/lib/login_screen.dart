@@ -37,7 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.green));
   }
 
-  // --- 1. ล็อกอินหลัก (ระบบ Auto-Detect รหัสผ่านชั่วคราว) ---
+  // --- 1. ล็อกอินหลัก ---
+  // ✅ แก้ไข: สลับให้ลอง Login ด้วย Firebase Auth ก่อนเพื่อหลีกเลี่ยง Security Rules
   Future<void> _handleLogin() async {
     String email = _emailCtrl.text.trim();
     String password = _passwordCtrl.text.trim();
@@ -50,31 +51,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. ตรวจสอบใน Firestore ก่อนว่าใช้ รหัสผ่านชั่วคราว หรือไม่?
-      var userQuery = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: email)
-          .get();
-
-      if (userQuery.docs.isNotEmpty) {
-        var userData = userQuery.docs.first.data();
-        String tempPass = userData['tempPassword'] ?? '';
-        bool isTokenUsed = userData['isTokenUsed'] ?? true;
-
-        if (tempPass == password && !isTokenUsed) {
-          // ถ้ารหัสผ่านตรงกับ Temp Password ให้เปลี่ยนไปหน้า First-Time ทันที
-          _showSuccess(
-            "Temporary password recognized. Please activate your account.",
-          );
-          setState(() {
-            _viewState = 1;
-            _passwordCtrl.clear();
-          });
-          return;
-        }
-      }
-
-      // 2. ถ้าไม่ใช่รหัสชั่วคราว ล็อกอินปกติด้วย Firebase Auth
+      // 1. ลองล็อกอินด้วยระบบ Firebase Auth หลักก่อน (วิธีนี้ไม่โดนบล็อก Rule)
       UserCredential userCredential = await FirebaseAuth.instance
           .signInWithEmailAndPassword(email: email, password: password);
 
@@ -84,6 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
             .collection('users')
             .doc(userCredential.user!.uid)
             .get();
+
         if (doc.exists && doc.data()?['isActive'] == false) {
           await FirebaseAuth.instance.signOut();
           _showError("Account suspended. Please contact Admin.");
@@ -99,7 +77,34 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
     } on FirebaseAuthException catch (_) {
-      _showError("Invalid Email or Password");
+      // 2. ถ้าล็อกอินหลักไม่ผ่าน ค่อยเช็คว่าเป็น "รหัสชั่วคราว (Temp Password)" หรือไม่
+      try {
+        var userQuery = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: email)
+            .get();
+
+        if (userQuery.docs.isNotEmpty) {
+          var userData = userQuery.docs.first.data();
+          String tempPass = userData['tempPassword'] ?? '';
+          bool isTokenUsed = userData['isTokenUsed'] ?? true;
+
+          if (tempPass == password && !isTokenUsed) {
+            _showSuccess(
+              "Temporary password recognized. Please activate your account.",
+            );
+            setState(() {
+              _viewState = 1;
+              _passwordCtrl.clear();
+            });
+            return;
+          }
+        }
+        _showError("Invalid Email or Password");
+      } catch (firestoreError) {
+        // ถ้าเข้าถึงฐานข้อมูลไม่ได้ (Permission Denied) ให้แสดงข้อความรหัสผ่านผิดปกติ
+        _showError("Invalid Email or Password");
+      }
     } catch (e) {
       _showError("An error occurred. Please try again.");
     } finally {
@@ -512,7 +517,7 @@ class _LoginScreenState extends State<LoginScreen> {
     required String hint,
     required IconData icon,
     bool isPassword = false,
-    bool enabled = true, // เพิ่ม property enabled
+    bool enabled = true,
   }) {
     return TextField(
       controller: controller,
