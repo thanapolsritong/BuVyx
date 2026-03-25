@@ -110,7 +110,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String userOrg = "Loading...";
   String userRoleString = "User";
   UserRole currentUserRole = UserRole.normalUser;
-  bool isAdmin = false;
+
+  // ✅ แก้ไข: ใช้ Getter เพื่อเช็คสิทธิ์การจัดการแบบ Real-time แทนตัวแปร isAdmin
+  bool get canManageSystem =>
+      currentUserRole == UserRole.superAdmin ||
+      currentUserRole == UserRole.secondAdmin;
 
   final List<Color> deviceColors = [
     Colors.blue,
@@ -315,18 +319,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             userOrg = data['organization'] ?? "BuVyx Network";
 
             String dbRole = data['role'] ?? 'User';
-            if (dbRole == 'Admin') {
+            if (dbRole == 'Admin' || dbRole == 'SuperAdmin') {
               currentUserRole = UserRole.superAdmin;
               userRoleString = "Super Admin";
-              isAdmin = true;
             } else if (dbRole == 'SecondAdmin') {
               currentUserRole = UserRole.secondAdmin;
               userRoleString = "Second Admin";
-              isAdmin = true;
             } else {
               currentUserRole = UserRole.normalUser;
               userRoleString = "User";
-              isAdmin = false;
             }
 
             if (data.containsKey('settings')) {
@@ -1038,7 +1039,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    if (isAdmin && DashboardScreen.recentLocations.isNotEmpty)
+                    if (canManageSystem &&
+                        DashboardScreen.recentLocations.isNotEmpty)
                       ElevatedButton.icon(
                         onPressed: () => _showAddDeviceDialog(setModalState),
                         icon: const Icon(
@@ -1112,7 +1114,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           ),
                                         ),
                                       ),
-                                      if (isAdmin) ...[
+                                      if (canManageSystem) ...[
                                         Switch(
                                           value: dev.isActive,
                                           activeColor: Colors.blue,
@@ -1405,10 +1407,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   _buildMenuItem(
                     LucideIcons.cpu,
-                    isAdmin ? "Device Management" : "View Devices",
+                    canManageSystem ? "Device Management" : "View Devices",
                     onTap: _showDeviceManagementModal,
                   ),
-                  if (isAdmin) ...[
+                  if (canManageSystem) ...[
                     _buildMenuItem(
                       LucideIcons.list,
                       "Logs",
@@ -1427,7 +1429,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         bottom: 5,
                       ),
                       child: Text(
-                        "ADMIN ONLY",
+                        "MANAGEMENT",
                         style: TextStyle(
                           color: textMuted,
                           fontSize: 11,
@@ -2267,12 +2269,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       TextButton.icon(
                         onPressed: _showDeviceManagementModal,
                         icon: Icon(
-                          isAdmin ? LucideIcons.settings : LucideIcons.eye,
+                          canManageSystem
+                              ? LucideIcons.settings
+                              : LucideIcons.eye,
                           size: 16,
                           color: Colors.blue,
                         ),
                         label: Text(
-                          isAdmin ? "Manage All" : "View Devices",
+                          canManageSystem ? "Manage All" : "View Devices",
                           style: const TextStyle(color: Colors.blue),
                         ),
                       ),
