@@ -39,7 +39,7 @@ class AppUser {
     // แปลง String ใน Database เป็น Enum
     String roleStr = data['role'] ?? 'User';
     UserRole r = UserRole.normalUser;
-    if (roleStr == 'Admin') r = UserRole.superAdmin;
+    if (roleStr == 'Admin' || roleStr == 'SuperAdmin') r = UserRole.superAdmin;
     if (roleStr == 'SecondAdmin') r = UserRole.secondAdmin;
 
     return AppUser(
@@ -109,7 +109,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       if (doc.exists) {
         final roleStr = doc.data()?['role'] ?? 'User';
         setState(() {
-          if (roleStr == 'Admin') {
+          if (roleStr == 'Admin' || roleStr == 'SuperAdmin') {
             currentUserRole = UserRole.superAdmin;
           } else if (roleStr == 'SecondAdmin') {
             currentUserRole = UserRole.secondAdmin;
@@ -256,6 +256,145 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
+  // ==========================================
+  // ✨ ฟังก์ชันใหม่: เปลี่ยน Role ของ User สำหรับ SuperAdmin
+  // ==========================================
+  void _showEditRoleDialog(AppUser targetUser) {
+    UserRole selectedRole = targetUser.role;
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: cardColor,
+            surfaceTintColor: Colors.transparent,
+            title: Text(
+              "Change Role",
+              style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Account: ${targetUser.email}",
+                  style: TextStyle(color: textMuted, fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<UserRole>(
+                  value: selectedRole,
+                  dropdownColor: cardColor,
+                  style: TextStyle(color: textColor),
+                  items: const [
+                    DropdownMenuItem(
+                      value: UserRole.superAdmin,
+                      child: Text("Super Admin"),
+                    ),
+                    DropdownMenuItem(
+                      value: UserRole.secondAdmin,
+                      child: Text("Second Admin"),
+                    ),
+                    DropdownMenuItem(
+                      value: UserRole.normalUser,
+                      child: Text("Normal User"),
+                    ),
+                  ],
+                  onChanged: (UserRole? value) {
+                    if (value != null) {
+                      setDialogState(() => selectedRole = value);
+                    }
+                  },
+                  decoration: InputDecoration(
+                    labelText: "Select New Role",
+                    labelStyle: TextStyle(color: textMuted),
+                    filled: true,
+                    fillColor: AppSettings.isDarkMode
+                        ? Colors.black26
+                        : Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text("Cancel", style: TextStyle(color: textMuted)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        // ถ้าไม่ได้เปลี่ยนตำแหน่ง ให้ปิดหน้าต่างได้เลย
+                        if (selectedRole == targetUser.role) {
+                          Navigator.pop(context);
+                          return;
+                        }
+
+                        setDialogState(() => isSaving = true);
+
+                        String roleStr = 'User';
+                        if (selectedRole == UserRole.superAdmin)
+                          roleStr = 'Admin';
+                        if (selectedRole == UserRole.secondAdmin)
+                          roleStr = 'SecondAdmin';
+
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(targetUser.id)
+                              .update({'role': roleStr});
+
+                          if (mounted) {
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  "Role updated successfully for ${targetUser.email}",
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Error updating role: $e"),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            setDialogState(() => isSaving = false);
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text(
+                        "Save Role",
+                        style: TextStyle(color: Colors.white),
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _showAddUserDialog() {
     final TextEditingController emailController = TextEditingController();
     UserRole selectedRole = UserRole.normalUser;
@@ -297,7 +436,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   dropdownColor: cardColor,
                   style: TextStyle(color: textColor),
                   items: [
-                    // 🚨 เพิ่มให้ SuperAdmin มองเห็นตัวเลือก Super Admin ด้วย
                     if (currentUserRole == UserRole.superAdmin)
                       const DropdownMenuItem(
                         value: UserRole.superAdmin,
@@ -349,14 +487,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                           String tempPass = _generateRandomString(8);
                           String token = _generateRandomString(16);
 
-                          // 🚨 แปลงค่าจาก Enum เป็น String ให้ถูกต้องก่อนบันทึกลง Database
                           String roleStr = 'User';
                           if (selectedRole == UserRole.superAdmin)
                             roleStr = 'Admin';
                           if (selectedRole == UserRole.secondAdmin)
                             roleStr = 'SecondAdmin';
 
-                          // สร้าง Document ใหม่ใน Firestore
                           await FirebaseFirestore.instance
                               .collection('users')
                               .add({
@@ -370,9 +506,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                               });
 
                           if (mounted) {
-                            Navigator.pop(context); // ปิดหน้าต่าง Add User
+                            Navigator.pop(context);
                             _showCredentialsDialog(
-                              // เด้งหน้าต่างโชว์รหัสใหม่
                               emailController.text.trim(),
                               tempPass,
                               token,
@@ -472,7 +607,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: borderColor),
               ),
-              // ใช้ StreamBuilder ดึงข้อมูลจาก Firestore แบบ Real-time
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('users')
@@ -509,6 +643,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       final user = AppUser.fromFirestore(doc);
                       final canManage = _canManageUser(user);
 
+                      // 🚨 อนุญาตให้เปลี่ยน Role ได้เฉพาะ SuperAdmin และไม่ใช่การเปลี่ยนของตัวเอง
+                      bool canChangeRole =
+                          currentUserRole == UserRole.superAdmin &&
+                          user.id != currentUserId;
+
                       return Padding(
                         padding: const EdgeInsets.all(16),
                         child: Row(
@@ -536,33 +675,56 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                         ),
                                       ),
                                       const SizedBox(width: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: user.roleColor.withOpacity(
-                                            0.1,
+
+                                      // ✨ เปลี่ยน Badge แสดงตำแหน่งให้สามารถกดได้ (สำหรับ SuperAdmin)
+                                      InkWell(
+                                        onTap: canChangeRole
+                                            ? () => _showEditRoleDialog(user)
+                                            : null,
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
                                           ),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
+                                          decoration: BoxDecoration(
                                             color: user.roleColor.withOpacity(
-                                              0.5,
+                                              0.1,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            border: Border.all(
+                                              color: user.roleColor.withOpacity(
+                                                0.5,
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                        child: Text(
-                                          user.roleName,
-                                          style: TextStyle(
-                                            color: user.roleColor,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                user.roleName,
+                                                style: TextStyle(
+                                                  color: user.roleColor,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              // โชว์ลูกศรเล็กๆ เพื่อบอกว่ากดเปลี่ยนตำแหน่งได้
+                                              if (canChangeRole) ...[
+                                                const SizedBox(width: 4),
+                                                Icon(
+                                                  LucideIcons.chevronDown,
+                                                  size: 10,
+                                                  color: user.roleColor,
+                                                ),
+                                              ],
+                                            ],
                                           ),
                                         ),
                                       ),
+
                                       if (!user.isActive) ...[
                                         const SizedBox(width: 6),
                                         Container(
@@ -678,11 +840,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 },
                               ),
                             ] else ...[
-                              // 🚨 โชว์ไอคอนบัญชีของฉัน หรือ ล็อค
                               Tooltip(
                                 message: user.id == currentUserId
                                     ? "Your Account"
-                                    : "No permission to edit this role",
+                                    : "No permission to edit this account",
                                 child: Padding(
                                   padding: const EdgeInsets.only(
                                     right: 8.0,

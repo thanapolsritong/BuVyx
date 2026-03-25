@@ -34,21 +34,20 @@ class AppSettings {
 // 2. Model สำหรับอุปกรณ์ (รองรับค่า DSP)
 // ==========================================
 class ConnectedDevice {
-  String docId; // เก็บ ID ของเอกสารจาก Firestore
+  String docId;
   String sn;
   String name;
-  String zone; // เก็บชื่อสถานที่เพื่อให้แมตช์กับ Dropdown
+  String zone;
   Color color;
   LatLng location;
 
   List<FlSpot> liveSpots = [];
   List<FlSpot> historySpots = [];
 
-  // ค่า Advanced DSP
   double currentRms = 0.0;
   double maxPga = 0.0;
-  List<FlSpot> fftSpots = []; // สำหรับกราฟ FFT (ความถี่)
-  List<List<double>> spectrogramData = []; // สำหรับ Heatmap (2D Array)
+  List<FlSpot> fftSpots = [];
+  List<List<double>> spectrogramData = [];
 
   double pga = 0.0;
   double temp = 28.5;
@@ -90,14 +89,11 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // --- ตัวแปรสำหรับเชื่อมต่อข้อมูลจริง ---
   List<ConnectedDevice> allDevices = [];
   StreamSubscription<QuerySnapshot>? _deviceSubscription;
 
-  // ตัวแปรควบคุมกราฟ
   int _startTime = DateTime.now().millisecondsSinceEpoch;
 
-  // ตัวแปรสำหรับโหมด History และ DatePicker
   bool _isLiveMode = true;
   List<String> _hiddenDeviceSn = [];
   DateTime? _startDate;
@@ -111,7 +107,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String userRoleString = "User";
   UserRole currentUserRole = UserRole.normalUser;
 
-  // ✅ แก้ไข: ใช้ Getter เพื่อเช็คสิทธิ์การจัดการแบบ Real-time แทนตัวแปร isAdmin
   bool get canManageSystem =>
       currentUserRole == UserRole.superAdmin ||
       currentUserRole == UserRole.secondAdmin;
@@ -124,7 +119,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Colors.pink,
   ];
 
-  // คัดกรองเอาเฉพาะอุปกรณ์ที่อยู่ในสถานที่ (Zone) ปัจจุบัน
   List<ConnectedDevice> get currentDevices => allDevices
       .where((d) => d.zone == DashboardScreen.lastVisitedLocation)
       .toList();
@@ -149,12 +143,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _fetchFirebaseUserProfile();
-
-    // ✅ เปิดการทำงานของ Real-time Listener ทันทีที่เข้าหน้าจอ
     _listenToDevicesFromFirestore();
 
     _zoomPanBehavior = MapZoomPanBehavior(
-      focalLatLng: const MapLatLng(14.0208, 100.5250), // ค่าเริ่มต้น
+      focalLatLng: const MapLatLng(14.0208, 100.5250),
       zoomLevel: 15,
       enableDoubleTapZooming: true,
       enablePinching: true,
@@ -168,13 +160,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    _deviceSubscription?.cancel(); // อย่าลืมปิดสตรีมข้อมูลเมื่อออกจากหน้านี้
+    _deviceSubscription?.cancel();
     super.dispose();
   }
 
-  // ----------------------------------------
-  // ✅ ระบบดึงข้อมูลจาก Firestore แบบ Real-time (รับค่า DSP ของจริง)
-  // ----------------------------------------
   void _listenToDevicesFromFirestore() {
     _deviceSubscription = FirebaseFirestore.instance
         .collection('devices')
@@ -227,7 +216,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               allDevices[index].signalStrength)
                           .toInt();
 
-                  // รับค่าเซนเซอร์พื้นฐาน
                   allDevices[index].pga = (data['pga'] ?? allDevices[index].pga)
                       .toDouble();
                   allDevices[index].temp =
@@ -239,7 +227,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       (data['pressure'] ?? allDevices[index].pressure)
                           .toDouble();
 
-                  // ✅ รับค่า Advanced DSP
                   allDevices[index].currentRms =
                       (data['rms'] ?? allDevices[index].currentRms).toDouble();
                   allDevices[index].maxPga =
@@ -268,7 +255,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         .toList();
                   }
 
-                  // เพิ่มกราฟแบบ Real-time เมื่อมีข้อมูลใหม่เข้ามา
                   if (_isLiveMode && data['pga'] != null) {
                     double timeKey =
                         (DateTime.now().millisecondsSinceEpoch - _startTime) /
@@ -300,7 +286,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------------------
-  // ✅ ฟังก์ชันดึง Profile จาก Firestore และโหลดการตั้งค่า
+  // ✅ ดึง Profile และ สถานที่ล่าสุดที่เคยเลือกไว้
   // ----------------------------------------
   Future<void> _fetchFirebaseUserProfile() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -330,6 +316,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
               userRoleString = "User";
             }
 
+            // 📌 โหลดรายชื่อสถานที่ และตำแหน่งล่าสุดจาก Firestore
+            if (data.containsKey('recentLocations')) {
+              DashboardScreen.recentLocations = List<String>.from(
+                data['recentLocations'],
+              );
+            }
+            if (data.containsKey('lastVisitedLocation')) {
+              String savedLoc = data['lastVisitedLocation'];
+              if (DashboardScreen.recentLocations.contains(savedLoc)) {
+                DashboardScreen.lastVisitedLocation = savedLoc;
+              }
+            }
+            // 📌 ป้องกันกรณีดึงมาแล้ว Dropdown ว่างเปล่า
+            if (DashboardScreen.lastVisitedLocation.isEmpty &&
+                DashboardScreen.recentLocations.isNotEmpty) {
+              DashboardScreen.lastVisitedLocation =
+                  DashboardScreen.recentLocations.first;
+            }
+
+            // โหลด Settings
             if (data.containsKey('settings')) {
               final config = data['settings'];
               AppSettings.isDarkMode = config['isDarkMode'] ?? true;
@@ -352,7 +358,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------------------
-  // ✅ ฟังก์ชันใหม่: เซฟการตั้งค่าลง Firestore ทันทีที่มีการเปลี่ยน
+  // ✅ เซฟ Settings และ "สถานที่ล่าสุด" ลง Firestore
   // ----------------------------------------
   Future<void> _saveSettingsToFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -368,6 +374,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           'chartUpdateRate': AppSettings.chartUpdateRate,
           'chartDataView': AppSettings.chartDataView,
         },
+        // 📌 บันทึกตำแหน่งสถานที่ล่าสุดเสมอ เพื่อให้เปิดเว็บมาใหม่ยังเจอที่เดิม
+        'lastVisitedLocation': DashboardScreen.lastVisitedLocation,
+        'recentLocations': DashboardScreen.recentLocations,
       }, SetOptions(merge: true));
     }
   }
@@ -385,7 +394,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _fetchHistoryData() {
     if (_startDate == null || _endDate == null) return;
-    // ระบบ History จะต้องดึงข้อมูลจาก Database ในอนาคต
     setState(() {
       for (var device in currentDevices) {
         device.historySpots.clear();
@@ -454,9 +462,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ----------------------------------------
-  // ✅ ฟังก์ชันเพิ่มข้อมูลลง Firestore ของจริง
-  // ----------------------------------------
   Future<void> _addDeviceToFirestore(
     String location,
     String sn,
@@ -465,7 +470,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ) async {
     if (location.isEmpty || location == "EMPTY") return;
     try {
-      // ✅ เปลี่ยนมาใช้ .doc(sn).set() เพื่อล็อกให้ Document ID เป็น BU-XXXXXXXX
       await FirebaseFirestore.instance.collection('devices').doc(sn).set({
         'sn': sn,
         'name': name,
@@ -502,9 +506,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ==========================================
-  // ✨ UI: การสร้าง Heatmap Spectrogram แบบแมนนวล ✨
-  // ==========================================
   Widget _buildSpectrogram(ConnectedDevice device) {
     if (device.spectrogramData.isEmpty)
       return const Center(
@@ -850,7 +851,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) => FullSettingsDialog(
         onSettingsChanged: () {
           setState(() {});
-          _saveSettingsToFirestore(); // 👇 เซฟลง Firebase ทันทีที่มีการเปลี่ยนการตั้งค่า
+          _saveSettingsToFirestore();
         },
       ),
     );
@@ -932,7 +933,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ? currentDevices.first.location
                     : const LatLng(14.0208, 100.5250);
 
-                // ยิงข้อมูลไป Firestore
                 _addDeviceToFirestore(
                   DashboardScreen.lastVisitedLocation,
                   snController.text.trim(),
@@ -997,7 +997,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
             onPressed: () async {
               if (nameController.text.trim().isNotEmpty) {
-                // อัปเดตข้อมูลบน Firestore
                 await FirebaseFirestore.instance
                     .collection('devices')
                     .doc(device.docId)
@@ -1398,12 +1397,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _buildMenuItem(
                     LucideIcons.map,
                     "Location Map",
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ThailandMapScreen(),
-                      ),
-                    ),
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const ThailandMapScreen(),
+                        ),
+                      );
+                      // 📌 เซฟข้อมูลทันทีเมื่อกลับมาจากหน้า Map
+                      _saveSettingsToFirestore();
+                      setState(() {});
+                    },
                   ),
                   _buildMenuItem(
                     LucideIcons.cpu,
@@ -1551,6 +1555,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 );
                               }
                             });
+                            // 📌 เซฟทันทีที่ผู้ใช้เปลี่ยนตำแหน่งจาก Dropdown
+                            _saveSettingsToFirestore();
                           }
                         },
                       ),
@@ -1590,12 +1596,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(height: 24),
                       ElevatedButton.icon(
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const ThailandMapScreen(),
-                          ),
-                        ),
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const ThailandMapScreen(),
+                            ),
+                          );
+                          // 📌 เซฟข้อมูลเมื่อกลับมาจาก Map แบบหน้าว่างๆ
+                          _saveSettingsToFirestore();
+                          setState(() {});
+                        },
                         icon: const Icon(
                           LucideIcons.map,
                           color: Colors.white,
