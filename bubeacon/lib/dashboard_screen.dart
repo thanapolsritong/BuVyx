@@ -182,8 +182,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
               if (data == null) continue;
 
-              if (change.type == DocumentChangeType.added) {
-                if (!allDevices.any((d) => d.docId == docId)) {
+              // ✅ รวมคำสั่ง (ดึงข้อมูลตอนโหลดเว็บครั้งแรก + ดึงข้อมูลตอนมีอัปเดต) ให้ประมวลผลเหมือนกัน!
+              if (change.type == DocumentChangeType.added ||
+                  change.type == DocumentChangeType.modified) {
+                // ถ้าเพิ่งโหลดแอปเจอเครื่องนี้ครั้งแรก ให้สร้างตัวเครื่องรอก่อน
+                if (change.type == DocumentChangeType.added &&
+                    !allDevices.any((d) => d.docId == docId)) {
                   allDevices.add(
                     ConnectedDevice(
                       docId: docId,
@@ -196,16 +200,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         (data['lat'] ?? 14.0).toDouble(),
                         (data['lng'] ?? 100.5).toDouble(),
                       ),
-                      isActive: data['isActive'] ?? true,
-                      isPluggedIn: data['isPluggedIn'] ?? true,
-                      batteryLevel: (data['batteryLevel'] ?? 100).toInt(),
-                      signalStrength: (data['signalStrength'] ?? 4).toInt(),
                     ),
                   );
                 }
-              } else if (change.type == DocumentChangeType.modified) {
+
+                // ดึงตำแหน่งของเครื่องนี้ในระบบ เพื่อยัดค่าเซนเซอร์ใส่เข้าไป
                 final index = allDevices.indexWhere((d) => d.docId == docId);
                 if (index != -1) {
+                  // สถานะพื้นฐาน
                   allDevices[index].name =
                       data['name'] ?? allDevices[index].name;
                   allDevices[index].isActive =
@@ -220,6 +222,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               allDevices[index].signalStrength)
                           .toInt();
 
+                  // ค่าเซนเซอร์สิ่งแวดล้อม
                   allDevices[index].pga = (data['pga'] ?? allDevices[index].pga)
                       .toDouble();
                   allDevices[index].temp =
@@ -231,11 +234,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       (data['pressure'] ?? allDevices[index].pressure)
                           .toDouble();
 
+                  // 🚨 ค่า Advanced DSP ที่เคยมองไม่เห็น จะถูกดึงตรงนี้แล้ว!
                   allDevices[index].currentRms =
                       (data['rms'] ?? allDevices[index].currentRms).toDouble();
                   allDevices[index].maxPga =
                       (data['max_pga'] ?? allDevices[index].maxPga).toDouble();
 
+                  // ดึงค่ากราฟ FFT
                   if (data['fftSpots'] != null) {
                     List<dynamic> rawFft = data['fftSpots'];
                     allDevices[index].fftSpots = rawFft
@@ -248,10 +253,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         .toList();
                   }
 
+                  // ดึงค่า Heatmap Spectrogram (แบบแอบแก้กฎ Firestore มา)
                   if (data['spectrogram'] != null) {
                     List<dynamic> rawSpec = data['spectrogram'];
                     allDevices[index].spectrogramData = rawSpec.map((item) {
-                      // ✨ อ่านข้อมูลจากคีย์ 'colData' ที่เราส่งมาจาก Node-RED
                       List<dynamic> colArray = item['colData'] ?? [];
                       return List<double>.from(
                         colArray.map((v) => (v ?? 0.0).toDouble()),
@@ -259,6 +264,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     }).toList();
                   }
 
+                  // วาดกราฟเส้นแบบ Real-time
                   if (_isLiveMode && data['pga'] != null) {
                     double timeKey =
                         (DateTime.now().millisecondsSinceEpoch - _startTime) /
@@ -266,6 +272,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     allDevices[index].liveSpots.add(
                       FlSpot(timeKey, allDevices[index].pga),
                     );
+
                     int maxSpots = AppSettings.chartDataView == '5 Minutes'
                         ? 300
                         : (AppSettings.chartDataView == '60 Seconds' ? 60 : 30);
@@ -287,7 +294,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }
           });
 
-          // ✨ กระตุ้นให้ Modal รีเฟรชอัตโนมัติเมื่อ Firebase มีการอัปเดต!
+          // กระตุ้นให้ Modal หรือสวิตช์ต่างๆ อัปเดตตาม
           _deviceUpdateNotifier.value++;
         });
   }
