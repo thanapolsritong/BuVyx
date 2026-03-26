@@ -92,6 +92,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<ConnectedDevice> allDevices = [];
   StreamSubscription<QuerySnapshot>? _deviceSubscription;
 
+  // ✨ ตัวกระตุ้นให้ Modal รีเฟรชอัตโนมัติแบบ Real-time
+  final ValueNotifier<int> _deviceUpdateNotifier = ValueNotifier<int>(0);
+
   int _startTime = DateTime.now().millisecondsSinceEpoch;
 
   bool _isLiveMode = true;
@@ -161,6 +164,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _deviceSubscription?.cancel();
+    _deviceUpdateNotifier.dispose(); // คืนค่าหน่วยความจำ
     super.dispose();
   }
 
@@ -282,12 +286,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               );
             }
           });
+
+          // ✨ กระตุ้นให้ Modal รีเฟรชอัตโนมัติเมื่อ Firebase มีการอัปเดต!
+          _deviceUpdateNotifier.value++;
         });
   }
 
-  // ----------------------------------------
-  // ✅ ดึง Profile และ สถานที่ล่าสุดที่เคยเลือกไว้
-  // ----------------------------------------
   Future<void> _fetchFirebaseUserProfile() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -316,7 +320,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               userRoleString = "User";
             }
 
-            // 📌 โหลดรายชื่อสถานที่ และตำแหน่งล่าสุดจาก Firestore
             if (data.containsKey('recentLocations')) {
               DashboardScreen.recentLocations = List<String>.from(
                 data['recentLocations'],
@@ -328,14 +331,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 DashboardScreen.lastVisitedLocation = savedLoc;
               }
             }
-            // 📌 ป้องกันกรณีดึงมาแล้ว Dropdown ว่างเปล่า
             if (DashboardScreen.lastVisitedLocation.isEmpty &&
                 DashboardScreen.recentLocations.isNotEmpty) {
               DashboardScreen.lastVisitedLocation =
                   DashboardScreen.recentLocations.first;
             }
 
-            // โหลด Settings
             if (data.containsKey('settings')) {
               final config = data['settings'];
               AppSettings.isDarkMode = config['isDarkMode'] ?? true;
@@ -357,9 +358,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ----------------------------------------
-  // ✅ เซฟ Settings และ "สถานที่ล่าสุด" ลง Firestore
-  // ----------------------------------------
   Future<void> _saveSettingsToFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -374,7 +372,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           'chartUpdateRate': AppSettings.chartUpdateRate,
           'chartDataView': AppSettings.chartDataView,
         },
-        // 📌 บันทึกตำแหน่งสถานที่ล่าสุดเสมอ เพื่อให้เปิดเว็บมาใหม่ยังเจอที่เดิม
         'lastVisitedLocation': DashboardScreen.lastVisitedLocation,
         'recentLocations': DashboardScreen.recentLocations,
       }, SetOptions(merge: true));
@@ -1059,250 +1056,271 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 16),
                 Expanded(
-                  child: currentDevices.isEmpty
-                      ? Center(
-                          child: Text(
-                            "No devices found.",
-                            style: TextStyle(color: textMuted),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: currentDevices.length,
-                          itemBuilder: (context, index) {
-                            final dev = currentDevices[index];
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: dev.isActive
-                                    ? cardColor
-                                    : (AppSettings.isDarkMode
-                                          ? Colors.black45
-                                          : Colors.grey[100]),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: dev.isActive
-                                      ? borderColor
-                                      : Colors.transparent,
-                                ),
+                  // ✨ ครอบ ListView ไว้ด้วย ValueListenableBuilder เพื่อให้มันรีเฟรชหน้าต่างทันที!
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _deviceUpdateNotifier,
+                    builder: (context, value, child) {
+                      return currentDevices.isEmpty
+                          ? Center(
+                              child: Text(
+                                "No devices found.",
+                                style: TextStyle(color: textMuted),
                               ),
-                              child: Column(
-                                children: [
-                                  Row(
+                            )
+                          : ListView.builder(
+                              itemCount: currentDevices.length,
+                              itemBuilder: (context, index) {
+                                final dev = currentDevices[index];
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: dev.isActive
+                                        ? cardColor
+                                        : (AppSettings.isDarkMode
+                                              ? Colors.black45
+                                              : Colors.grey[100]),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: dev.isActive
+                                          ? borderColor
+                                          : Colors.transparent,
+                                    ),
+                                  ),
+                                  child: Column(
                                     children: [
-                                      Container(
-                                        width: 12,
-                                        height: 12,
-                                        decoration: BoxDecoration(
-                                          color: dev.isActive
-                                              ? dev.color
-                                              : Colors.grey,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          "${dev.name} (${dev.sn})",
-                                          style: TextStyle(
-                                            color: dev.isActive
-                                                ? textColor
-                                                : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16,
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 12,
+                                            height: 12,
+                                            decoration: BoxDecoration(
+                                              color: dev.isActive
+                                                  ? dev.color
+                                                  : Colors.grey,
+                                              shape: BoxShape.circle,
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                      if (canManageSystem) ...[
-                                        Switch(
-                                          value: dev.isActive,
-                                          activeColor: Colors.blue,
-                                          onChanged: (val) async {
-                                            await FirebaseFirestore.instance
-                                                .collection('devices')
-                                                .doc(dev.docId)
-                                                .update({'isActive': val});
-                                          },
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(
-                                            LucideIcons.edit3,
-                                            color: Colors.blue,
-                                            size: 18,
-                                          ),
-                                          onPressed: () =>
-                                              _showEditDeviceDialog(
-                                                dev,
-                                                setModalState,
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              "${dev.name} (${dev.sn})",
+                                              style: TextStyle(
+                                                color: dev.isActive
+                                                    ? textColor
+                                                    : Colors.grey,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 16,
                                               ),
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(
-                                            LucideIcons.trash2,
-                                            color: Colors.redAccent,
-                                            size: 18,
+                                            ),
                                           ),
-                                          onPressed: () async {
-                                            await FirebaseFirestore.instance
-                                                .collection('devices')
-                                                .doc(dev.docId)
-                                                .delete();
-                                          },
+                                          if (canManageSystem) ...[
+                                            Switch(
+                                              value: dev.isActive,
+                                              activeColor: Colors.blue,
+                                              onChanged: (val) async {
+                                                // ✨ Optimistic Update: เปลี่ยน UI ทันที! ทำให้สวิตช์ไม่ค้าง
+                                                setModalState(() {
+                                                  dev.isActive = val;
+                                                });
+                                                setState(
+                                                  () {},
+                                                ); // อัปเดตหน้า Dashboard ด้วย
+
+                                                await FirebaseFirestore.instance
+                                                    .collection('devices')
+                                                    .doc(dev.docId)
+                                                    .update({'isActive': val});
+                                              },
+                                            ),
+                                            IconButton(
+                                              icon: const Icon(
+                                                LucideIcons.edit3,
+                                                color: Colors.blue,
+                                                size: 18,
+                                              ),
+                                              onPressed: () =>
+                                                  _showEditDeviceDialog(
+                                                    dev,
+                                                    setModalState,
+                                                  ),
+                                            ),
+                                            IconButton(
+                                              icon: const Icon(
+                                                LucideIcons.trash2,
+                                                color: Colors.redAccent,
+                                                size: 18,
+                                              ),
+                                              onPressed: () async {
+                                                await FirebaseFirestore.instance
+                                                    .collection('devices')
+                                                    .doc(dev.docId)
+                                                    .delete();
+                                              },
+                                            ),
+                                          ] else ...[
+                                            Text(
+                                              dev.isActive
+                                                  ? "Active"
+                                                  : "Offline",
+                                              style: TextStyle(
+                                                color: dev.isActive
+                                                    ? Colors.green
+                                                    : Colors.grey,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                      Divider(color: borderColor, height: 24),
+                                      Opacity(
+                                        opacity: dev.isActive ? 1.0 : 0.4,
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            _buildMiniStat(
+                                              "Temp",
+                                              "${dev.temp.toStringAsFixed(1)}°C",
+                                              fontSize: 14,
+                                            ),
+                                            _buildMiniStat(
+                                              "Hum",
+                                              "${dev.humidity.toStringAsFixed(1)}%",
+                                              fontSize: 14,
+                                            ),
+                                            _buildMiniStat(
+                                              "Pres",
+                                              "${dev.pressure.toStringAsFixed(0)} hPa",
+                                              fontSize: 14,
+                                            ),
+                                            _buildMiniStat(
+                                              "PGA",
+                                              "${dev.pga.toStringAsFixed(2)}%g",
+                                              fontSize: 14,
+                                              color: Colors.orange,
+                                            ),
+                                          ],
                                         ),
-                                      ] else ...[
-                                        Text(
-                                          dev.isActive ? "Active" : "Offline",
-                                          style: TextStyle(
-                                            color: dev.isActive
-                                                ? Colors.green
-                                                : Colors.grey,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
+                                      ),
+                                      if (dev.isActive) ...[
+                                        const SizedBox(height: 16),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: AppSettings.isDarkMode
+                                                ? Colors.black26
+                                                : Colors.grey[100],
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    dev.isPluggedIn
+                                                        ? LucideIcons.plug
+                                                        : LucideIcons.zap,
+                                                    color: dev.isPluggedIn
+                                                        ? Colors.green
+                                                        : Colors.orange,
+                                                    size: 14,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    dev.isPluggedIn
+                                                        ? "AC Power"
+                                                        : "Battery Mode",
+                                                    style: TextStyle(
+                                                      color: dev.isPluggedIn
+                                                          ? Colors.green
+                                                          : Colors.orange,
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    dev.isPluggedIn
+                                                        ? LucideIcons
+                                                              .batteryCharging
+                                                        : _getBatteryIcon(
+                                                            dev.batteryLevel,
+                                                          ),
+                                                    color: dev.isPluggedIn
+                                                        ? Colors.green
+                                                        : _getBatteryColor(
+                                                            dev.batteryLevel,
+                                                          ),
+                                                    size: 14,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    "${dev.batteryLevel}%",
+                                                    style: TextStyle(
+                                                      color: dev.isPluggedIn
+                                                          ? Colors.green
+                                                          : _getBatteryColor(
+                                                              dev.batteryLevel,
+                                                            ),
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    _getSignalIcon(
+                                                      dev.signalStrength,
+                                                    ),
+                                                    color: _getSignalColor(
+                                                      dev.signalStrength,
+                                                    ),
+                                                    size: 14,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    _getSignalText(
+                                                      dev.signalStrength,
+                                                    ),
+                                                    style: TextStyle(
+                                                      color: _getSignalColor(
+                                                        dev.signalStrength,
+                                                      ),
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ],
                                     ],
                                   ),
-                                  Divider(color: borderColor, height: 24),
-                                  Opacity(
-                                    opacity: dev.isActive ? 1.0 : 0.4,
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        _buildMiniStat(
-                                          "Temp",
-                                          "${dev.temp.toStringAsFixed(1)}°C",
-                                          fontSize: 14,
-                                        ),
-                                        _buildMiniStat(
-                                          "Hum",
-                                          "${dev.humidity.toStringAsFixed(1)}%",
-                                          fontSize: 14,
-                                        ),
-                                        _buildMiniStat(
-                                          "Pres",
-                                          "${dev.pressure.toStringAsFixed(0)} hPa",
-                                          fontSize: 14,
-                                        ),
-                                        _buildMiniStat(
-                                          "PGA",
-                                          "${dev.pga.toStringAsFixed(2)}%g",
-                                          fontSize: 14,
-                                          color: Colors.orange,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (dev.isActive) ...[
-                                    const SizedBox(height: 16),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: AppSettings.isDarkMode
-                                            ? Colors.black26
-                                            : Colors.grey[100],
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                dev.isPluggedIn
-                                                    ? LucideIcons.plug
-                                                    : LucideIcons.zap,
-                                                color: dev.isPluggedIn
-                                                    ? Colors.green
-                                                    : Colors.orange,
-                                                size: 14,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                dev.isPluggedIn
-                                                    ? "AC Power"
-                                                    : "Battery Mode",
-                                                style: TextStyle(
-                                                  color: dev.isPluggedIn
-                                                      ? Colors.green
-                                                      : Colors.orange,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                dev.isPluggedIn
-                                                    ? LucideIcons
-                                                          .batteryCharging
-                                                    : _getBatteryIcon(
-                                                        dev.batteryLevel,
-                                                      ),
-                                                color: dev.isPluggedIn
-                                                    ? Colors.green
-                                                    : _getBatteryColor(
-                                                        dev.batteryLevel,
-                                                      ),
-                                                size: 14,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                "${dev.batteryLevel}%",
-                                                style: TextStyle(
-                                                  color: dev.isPluggedIn
-                                                      ? Colors.green
-                                                      : _getBatteryColor(
-                                                          dev.batteryLevel,
-                                                        ),
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                _getSignalIcon(
-                                                  dev.signalStrength,
-                                                ),
-                                                color: _getSignalColor(
-                                                  dev.signalStrength,
-                                                ),
-                                                size: 14,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                _getSignalText(
-                                                  dev.signalStrength,
-                                                ),
-                                                style: TextStyle(
-                                                  color: _getSignalColor(
-                                                    dev.signalStrength,
-                                                  ),
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
+                                );
+                              },
                             );
-                          },
-                        ),
+                    },
+                  ),
                 ),
               ],
             ),
