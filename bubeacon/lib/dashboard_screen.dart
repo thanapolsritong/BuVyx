@@ -1906,7 +1906,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         : LineChart(
                             LineChartData(
                               minY: 0,
-                              maxY: 100,
+                              maxY: 50,
                               lineTouchData: _lineTouchData,
                               gridData: FlGridData(
                                 show: true,
