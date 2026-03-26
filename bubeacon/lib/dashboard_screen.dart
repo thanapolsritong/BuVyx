@@ -250,13 +250,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                   if (data['spectrogram'] != null) {
                     List<dynamic> rawSpec = data['spectrogram'];
-                    allDevices[index].spectrogramData = rawSpec
-                        .map(
-                          (col) => List<double>.from(
-                            col.map((v) => (v ?? 0.0).toDouble()),
-                          ),
-                        )
-                        .toList();
+                    allDevices[index].spectrogramData = rawSpec.map((item) {
+                      // ✨ อ่านข้อมูลจากคีย์ 'colData' ที่เราส่งมาจาก Node-RED
+                      List<dynamic> colArray = item['colData'] ?? [];
+                      return List<double>.from(
+                        colArray.map((v) => (v ?? 0.0).toDouble()),
+                      );
+                    }).toList();
                   }
 
                   if (_isLiveMode && data['pga'] != null) {
