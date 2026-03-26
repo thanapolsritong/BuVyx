@@ -1889,7 +1889,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                   // กราฟ PGA
                   Container(
-                    height: 300,
+                    height: 200,
                     padding: const EdgeInsets.fromLTRB(10, 24, 24, 10),
                     decoration: BoxDecoration(
                       color: cardColor,
