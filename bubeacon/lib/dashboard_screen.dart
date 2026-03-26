@@ -1889,7 +1889,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                   // กราฟ PGA
                   Container(
-                    height: 200,
+                    height: 300,
                     padding: const EdgeInsets.fromLTRB(10, 24, 24, 10),
                     decoration: BoxDecoration(
                       color: cardColor,
@@ -1906,7 +1906,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         : LineChart(
                             LineChartData(
                               minY: 0,
-                              maxY: 20,
+                              maxY: 100,
                               lineTouchData: _lineTouchData,
                               gridData: FlGridData(
                                 show: true,
