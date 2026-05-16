@@ -246,28 +246,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   allDevices[index].maxPga =
                       (data['max_pga'] ?? allDevices[index].maxPga).toDouble();
 
-                  // ดึงค่ากราฟ FFT
+                  // ดึงค่ากราฟ FFT — รองรับทั้ง [{x,y}] และ [num] จาก Node-RED
                   if (data['fftSpots'] != null) {
                     List<dynamic> rawFft = data['fftSpots'];
                     allDevices[index].fftSpots = rawFft
-                        .map(
-                          (e) => FlSpot(
-                            (e['x'] ?? 0).toDouble(),
-                            (e['y'] ?? 0).toDouble(),
-                          ),
-                        )
+                        .asMap()
+                        .entries
+                        .map((entry) {
+                          final e = entry.value;
+                          if (e is Map) {
+                            return FlSpot(
+                              (e['x'] ?? 0).toDouble(),
+                              (e['y'] ?? 0).toDouble(),
+                            );
+                          } else {
+                            return FlSpot(
+                              entry.key.toDouble(),
+                              (e ?? 0).toDouble(),
+                            );
+                          }
+                        })
                         .toList();
                   }
 
-                  // ดึงค่า Heatmap Spectrogram (แบบแอบแก้กฎ Firestore มา)
+                  // ดึงค่า Heatmap Spectrogram — เช็ค type ก่อน access colData
                   if (data['spectrogram'] != null) {
                     List<dynamic> rawSpec = data['spectrogram'];
-                    allDevices[index].spectrogramData = rawSpec.map((item) {
-                      List<dynamic> colArray = item['colData'] ?? [];
-                      return List<double>.from(
-                        colArray.map((v) => (v ?? 0.0).toDouble()),
-                      );
-                    }).toList();
+                    allDevices[index].spectrogramData = rawSpec
+                        .whereType<Map>()
+                        .map((item) {
+                          List<dynamic> colArray = item['colData'] ?? [];
+                          return List<double>.from(
+                            colArray.map((v) => (v ?? 0.0).toDouble()),
+                          );
+                        })
+                        .toList();
                   }
 
                   // วาดกราฟเส้นแบบ Real-time
@@ -605,6 +618,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return touchedSpots.map((LineBarSpot touchedSpot) {
           final device = currentDevices.firstWhere(
             (d) => d.color == touchedSpot.bar.color,
+            orElse: () => currentDevices.first,
           );
 
           DateTime spotTime;

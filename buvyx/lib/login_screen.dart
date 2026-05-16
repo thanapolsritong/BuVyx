@@ -87,7 +87,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (userQuery.docs.isNotEmpty) {
           var userData = userQuery.docs.first.data();
           String tempPass = userData['tempPassword'] ?? '';
-          bool isTokenUsed = userData['isTokenUsed'] ?? true;
+          bool isTokenUsed = userData['isTokenUsed'] ?? false;
 
           if (tempPass == password && !isTokenUsed) {
             _showSuccess(
