@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1005834012811",
+    "project_id": "buvyxjaa",
+    "storage_bucket": "buvyxjaa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1005834012811:android:4b1e3aeb88e6221365ec8e",
+        "android_client_info": {
+          "package_name": "com.example.bubeacon"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDkA0YCZM70tnr9c9u1S-TvhQ0obTY7m4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

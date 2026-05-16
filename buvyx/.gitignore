@@ -8,6 +8,7 @@
 .build/
 .buildlog/
 .history
+.firebase/
 .svn/
 .swiftpm/
 migrate_working_dir/

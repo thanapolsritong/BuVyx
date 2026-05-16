@@ -33,8 +33,6 @@ dependencies:
   fl_chart: ^0.66.0      # สำหรับทำกราฟ Seismograph (แทน Recharts)
   lucide_icons: ^0.257.0   # สำหรับไอคอนสวยๆ (เหมือนใน React)
   google_fonts: ^6.1.0   # สำหรับฟอนต์ที่ทันสมัย
-  firebase_core: ^2.24.0 # สำหรับเชื่อมต่อฐานข้อมูล Real-time
-  firebase_database: ^10.4.0
   syncfusion_flutter_maps: ^24.1.41 # หรือเวอร์ชันล่าสุด
   syncfusion_flutter_core: ^24.1.41
 
@@ -42,7 +40,12 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   latlong2: ^0.9.1
-
+  firebase_core: ^4.8.0
+  firebase_auth: ^6.2.0
+  cloud_firestore: ^6.4.0
+  firebase_database: ^12.1.4
+  intl: ^0.20.2
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

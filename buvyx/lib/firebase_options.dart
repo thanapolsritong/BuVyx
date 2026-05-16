@@ -41,48 +41,49 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyBKAoixi8pDVhjj3Do6GiO6vfAWPCOgoyk',
-    appId: '1:1042400144523:web:0e0ed78f55843cff6ff88e',
-    messagingSenderId: '1042400144523',
-    projectId: 'buvyx-project',
-    authDomain: 'buvyx-project.firebaseapp.com',
-    storageBucket: 'buvyx-project.firebasestorage.app',
-    measurementId: 'G-GV8G8RQEY8',
+    apiKey: 'AIzaSyAi3xN1bGzr6fdeaKE9O-9FmELK7Oo6RVY',
+    appId: '1:1005834012811:web:d2daa98f0e8687a265ec8e',
+    messagingSenderId: '1005834012811',
+    projectId: 'buvyxjaa',
+    authDomain: 'buvyxjaa.firebaseapp.com',
+    storageBucket: 'buvyxjaa.firebasestorage.app',
+    measurementId: 'G-MD6SVQH7MS',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDiyyVrDT2y26d5v9fikwxVBXSqPvaFczs',
-    appId: '1:1042400144523:android:856c64fb1ddeb7e76ff88e',
-    messagingSenderId: '1042400144523',
-    projectId: 'buvyx-project',
-    storageBucket: 'buvyx-project.firebasestorage.app',
+    apiKey: 'AIzaSyBDkA0YCZM70tnr9c9u1S-TvhQ0obTY7m4',
+    appId: '1:1005834012811:android:4b1e3aeb88e6221365ec8e',
+    messagingSenderId: '1005834012811',
+    projectId: 'buvyxjaa',
+    storageBucket: 'buvyxjaa.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyA24WdZrE5PqUG8Ll01yIDu5ZsawixTUdI',
-    appId: '1:1042400144523:ios:7acf9192021dcf006ff88e',
-    messagingSenderId: '1042400144523',
-    projectId: 'buvyx-project',
-    storageBucket: 'buvyx-project.firebasestorage.app',
+    apiKey: 'AIzaSyDI7IN1ebxcSaOSbVwUc8qidPoia2rETCo',
+    appId: '1:1005834012811:ios:763f30d8e96abf0965ec8e',
+    messagingSenderId: '1005834012811',
+    projectId: 'buvyxjaa',
+    storageBucket: 'buvyxjaa.firebasestorage.app',
     iosBundleId: 'com.example.bubeacon',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyA24WdZrE5PqUG8Ll01yIDu5ZsawixTUdI',
-    appId: '1:1042400144523:ios:7acf9192021dcf006ff88e',
-    messagingSenderId: '1042400144523',
-    projectId: 'buvyx-project',
-    storageBucket: 'buvyx-project.firebasestorage.app',
+    apiKey: 'AIzaSyDI7IN1ebxcSaOSbVwUc8qidPoia2rETCo',
+    appId: '1:1005834012811:ios:763f30d8e96abf0965ec8e',
+    messagingSenderId: '1005834012811',
+    projectId: 'buvyxjaa',
+    storageBucket: 'buvyxjaa.firebasestorage.app',
     iosBundleId: 'com.example.bubeacon',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyBKAoixi8pDVhjj3Do6GiO6vfAWPCOgoyk',
-    appId: '1:1042400144523:web:311e5b3295405f136ff88e',
-    messagingSenderId: '1042400144523',
-    projectId: 'buvyx-project',
-    authDomain: 'buvyx-project.firebaseapp.com',
-    storageBucket: 'buvyx-project.firebasestorage.app',
-    measurementId: 'G-1N5K0DPC9L',
+    apiKey: 'AIzaSyAi3xN1bGzr6fdeaKE9O-9FmELK7Oo6RVY',
+    appId: '1:1005834012811:web:72dc8de17ff0f26565ec8e',
+    messagingSenderId: '1005834012811',
+    projectId: 'buvyxjaa',
+    authDomain: 'buvyxjaa.firebaseapp.com',
+    storageBucket: 'buvyxjaa.firebasestorage.app',
+    measurementId: 'G-ED31BS7R7H',
   );
+
 }

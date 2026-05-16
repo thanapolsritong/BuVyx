@@ -183,6 +183,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               if (data == null) continue;
 
               // ✅ รวมคำสั่ง (ดึงข้อมูลตอนโหลดเว็บครั้งแรก + ดึงข้อมูลตอนมีอัปเดต) ให้ประมวลผลเหมือนกัน!
+              // กรองเฉพาะ device ที่ Admin อนุมัติแล้ว ป้องกันอุปกรณ์แปลกปลอมโผล่บน Dashboard
+              if (data['status'] != 'registered') {
+                allDevices.removeWhere((d) => d.docId == docId);
+                continue;
+              }
+
               if (change.type == DocumentChangeType.added ||
                   change.type == DocumentChangeType.modified) {
                 // ถ้าเพิ่งโหลดแอปเจอเครื่องนี้ครั้งแรก ให้สร้างตัวเครื่องรอก่อน
@@ -478,6 +484,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'sn': sn,
         'name': name,
         'zone': location,
+        'status': 'registered',
         'lat': loc.latitude,
         'lng': loc.longitude,
         'isActive': true,
@@ -1903,10 +1910,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               style: TextStyle(color: textMuted),
                             ),
                           )
-                        : LineChart(
+                        : Builder(
+                            builder: (context) {
+                              final visibleSpots = currentDevices
+                                  .where((d) =>
+                                      d.isActive &&
+                                      !_hiddenDeviceSn.contains(d.sn))
+                                  .expand((d) => _isLiveMode
+                                      ? d.liveSpots
+                                      : d.historySpots)
+                                  .map((s) => s.y);
+                              final peakVal = visibleSpots.isEmpty
+                                  ? 10.0
+                                  : visibleSpots.reduce(max);
+                              final dynamicMaxY = max(10.0, peakVal * 1.2);
+                              return LineChart(
                             LineChartData(
                               minY: 0,
-                              maxY: 50,
+                              maxY: dynamicMaxY,
                               lineTouchData: _lineTouchData,
                               gridData: FlGridData(
                                 show: true,
@@ -2012,6 +2033,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   )
                                   .toList(),
                             ),
+                          );
+                            },
                           ),
                   ),
                   const SizedBox(height: 32),
