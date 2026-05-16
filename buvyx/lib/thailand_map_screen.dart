@@ -56,6 +56,8 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
   // --- ตัวแปรสำหรับข้อมูลอุปกรณ์จริงจาก Firestore ---
   List<MapDeviceMarker> _realDevices = [];
   StreamSubscription<QuerySnapshot>? _deviceSubscription;
+  Key _mapKey = UniqueKey();
+  bool _markersInitialized = false;
 
   final List<Map<String, dynamic>> _provinces = [
     {"name": "Amnat Charoen", "area": 3161.0, "lat": 15.8657, "lng": 104.6258},
@@ -302,23 +304,32 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
             );
           }).toList();
 
-          setState(() {
-            _realDevices = newDevices;
-          });
+          if (!_markersInitialized) {
+            // First load: rebuild SfMaps with correct initialMarkersCount
+            setState(() {
+              _realDevices = newDevices;
+              _mapKey = UniqueKey();
+              _markersInitialized = true;
+            });
+          } else {
+            setState(() {
+              _realDevices = newDevices;
+            });
 
-          // ใช้ Controller สั่งเพิ่ม/เคลียร์หมุดแทนการเปลี่ยน Key แผนที่
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              try {
-                _layerController.clearMarkers();
-                for (int i = 0; i < _realDevices.length; i++) {
-                  _layerController.insertMarker(i);
+            // Subsequent updates: use controller to update markers
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                try {
+                  _layerController.clearMarkers();
+                  for (int i = 0; i < _realDevices.length; i++) {
+                    _layerController.insertMarker(i);
+                  }
+                } catch (e) {
+                  debugPrint("Marker update ignored: $e");
                 }
-              } catch (e) {
-                print("Marker update ignored: $e");
               }
-            }
-          });
+            });
+          }
         });
   }
 
@@ -443,6 +454,7 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
                 );
               },
               child: SfMaps(
+                key: _mapKey,
                 layers: [
                   MapShapeLayer(
                     controller: _layerController,
