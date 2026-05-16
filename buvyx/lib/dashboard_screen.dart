@@ -480,40 +480,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ) async {
     if (location.isEmpty || location == "EMPTY") return;
     try {
-      await FirebaseFirestore.instance.collection('devices').doc(sn).set({
-        'sn': sn,
+      // เช็คว่า SN นี้มีในระบบจาก Hardware จริงๆ ไหม
+      final docRef = FirebaseFirestore.instance.collection('devices').doc(sn);
+      final doc = await docRef.get();
+
+      if (!doc.exists) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Device not found. Please check the Serial Number."),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        return;
+      }
+
+      // SN มีอยู่แล้ว → approve โดยอัปเดตเฉพาะ field ที่ Admin กำหนด
+      await docRef.update({
+        'status': 'registered',
         'name': name,
         'zone': location,
-        'status': 'registered',
         'lat': loc.latitude,
         'lng': loc.longitude,
-        'isActive': true,
-        'isPluggedIn': true,
-        'batteryLevel': 100,
-        'signalStrength': 4,
-        'pga': 0.0,
-        'temp': 28.0,
-        'humidity': 50.0,
-        'pressure': 1010.0,
-        'rms': 0.0,
-        'max_pga': 0.0,
-        'fftSpots': [],
-        'spectrogram': [],
-        'createdAt': FieldValue.serverTimestamp(),
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Device Added Successfully!"),
-          backgroundColor: Colors.green,
-        ),
-      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Device $sn approved successfully!"),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Failed to add device: $e"),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to add device: $e"),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     }
   }
 
