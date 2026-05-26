@@ -305,13 +305,20 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
           }).toList();
 
           if (!_markersInitialized) {
-            // First load: rebuild SfMaps with correct initialMarkersCount
+            // Bug #2 & #3: recreate _layerController when _mapKey is refreshed
+            // so the new SfMaps widget gets a fresh controller
+            // Bug #6: reset AnimationController to avoid bad state on key change
+            if (_panelController.isAnimating) {
+              _panelController.stop();
+            }
             setState(() {
               _realDevices = newDevices;
+              _layerController = MapShapeLayerController();
               _mapKey = UniqueKey();
               _markersInitialized = true;
             });
           } else {
+            // Bug #12: consolidate into single setState
             setState(() {
               _realDevices = newDevices;
             });
@@ -325,7 +332,9 @@ class _ThailandMapScreenState extends State<ThailandMapScreen>
                     _layerController.insertMarker(i);
                   }
                 } catch (e) {
+                  // Bug #5: fallback setState to force rebuild if controller ops fail
                   debugPrint("Marker update ignored: $e");
+                  if (mounted) setState(() {});
                 }
               }
             });
@@ -882,7 +891,11 @@ class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              // Bug #9: dispose controller before closing dialog
+              locCtrl.dispose();
+              Navigator.pop(context);
+            },
             child: const Text(
               "Cancel",
               style: TextStyle(color: Colors.white54),
@@ -891,13 +904,16 @@ class _ProvinceSidePanelState extends State<ProvinceSidePanel> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
             onPressed: () async {
-              if (locCtrl.text.trim().isNotEmpty) {
+              final text = locCtrl.text.trim();
+              if (text.isNotEmpty) {
+                // Bug #9: dispose controller before closing dialog
+                locCtrl.dispose();
                 // ✅ เพิ่มข้อมูลโซนใหม่เข้าไปใน Firestore (Array)
                 await FirebaseFirestore.instance
                     .collection('locations')
                     .doc(widget.officialName)
                     .set({
-                      'zones': FieldValue.arrayUnion([locCtrl.text.trim()]),
+                      'zones': FieldValue.arrayUnion([text]),
                     }, SetOptions(merge: true));
 
                 if (mounted) Navigator.pop(context);

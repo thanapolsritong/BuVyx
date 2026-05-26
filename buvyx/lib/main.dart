@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // ✅ เพิ่ม Firebase Auth
+import 'package:firebase_auth/firebase_auth.dart'; 
 import 'firebase_options.dart';
 import 'login_screen.dart';
-import 'dashboard_screen.dart'; // ✅ เพิ่ม Dashboard Screen
+import 'dashboard_screen.dart';
 
 void main() async {
   // บอกให้ Flutter รอการตั้งค่าต่างๆ ให้เสร็จก่อน

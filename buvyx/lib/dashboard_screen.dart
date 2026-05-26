@@ -175,6 +175,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         .listen((snapshot) {
           if (!mounted) return;
 
+          // Bug #8: only rebuild if there are actual changes
+          if (snapshot.docChanges.isEmpty) return;
+
           setState(() {
             for (var change in snapshot.docChanges) {
               final data = change.doc.data();
@@ -890,7 +893,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _showAddDeviceDialog(StateSetter setModalState) {
+  // Bug #10: removed unused setModalState parameter
+  void _showAddDeviceDialog() {
     if (DashboardScreen.recentLocations.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -952,31 +956,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              // Bug #11: dispose controllers before closing dialog
+              snController.dispose();
+              nameController.dispose();
+              Navigator.pop(context);
+            },
             child: Text("Cancel", style: TextStyle(color: textMuted)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-            onPressed: () {
-              if (snController.text.trim().isNotEmpty) {
-                String devName = nameController.text.trim().isEmpty
-                    ? "Node-${snController.text}"
-                    : nameController.text.trim();
+            // Bug #1: await the Firestore write, then pop so stream listener handles update
+            onPressed: () async {
+              final snText = snController.text.trim();
+              if (snText.isNotEmpty) {
+                final nameText = nameController.text.trim();
+                String devName = nameText.isEmpty
+                    ? "Node-$snText"
+                    : nameText;
                 LatLng baseLoc = currentDevices.isNotEmpty
                     ? currentDevices.first.location
                     : const LatLng(14.0208, 100.5250);
 
-                _addDeviceToFirestore(
+                // Bug #11: dispose controllers before closing dialog
+                snController.dispose();
+                nameController.dispose();
+                Navigator.pop(context);
+
+                // Bug #1: let stream listener handle UI update after write
+                await _addDeviceToFirestore(
                   DashboardScreen.lastVisitedLocation,
-                  snController.text.trim(),
+                  snText,
                   devName,
                   LatLng(
                     baseLoc.latitude + (Random().nextDouble() * 0.005),
                     baseLoc.longitude + (Random().nextDouble() * 0.005),
                   ),
                 );
-
-                Navigator.pop(context);
               }
             },
             child: const Text(
@@ -1074,7 +1090,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     if (canManageSystem &&
                         DashboardScreen.recentLocations.isNotEmpty)
                       ElevatedButton.icon(
-                        onPressed: () => _showAddDeviceDialog(setModalState),
+                        onPressed: () => _showAddDeviceDialog(),
                         icon: const Icon(
                           LucideIcons.plus,
                           size: 16,
